@@ -199,10 +199,16 @@ fun GamePlayScreen(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
+                            val leadDelta = rivalDist - distToFinish
+                            val raceStatusLabel = when {
+                                leadDelta > 0 -> "LEAD +$leadDelta"
+                                leadDelta < 0 -> "RIVAL +${-leadDelta}"
+                                else -> "TIED"
+                            }
                             Text(
-                                text = "🏁 $distToFinish  •  🤖 $rivalDist  •  ${if (race.isPractice) strings.practiceBadge else strings.verifiedBadge}",
+                                text = "🏁 $distToFinish  •  $raceStatusLabel  •  ${if (race.isPractice) strings.practiceBadge else strings.verifiedBadge}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = if (distToFinish <= rivalDist) EmeraldGem else RivalCrimson,
+                                color = if (leadDelta >= 0) EmeraldGem else RivalCrimson,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -298,10 +304,10 @@ fun GamePlayScreen(
                     modifier = Modifier.weight(1f)
                 )
                 HudMetricCard(
-                    label = strings.combo,
+                    label = if (race.overdriveActive) "🔥 FEVER" else strings.combo,
                     value = "x${race.combo}",
-                    accent = ForgedGold,
-                    modifier = Modifier.weight(0.85f)
+                    accent = if (race.overdriveActive) Color(0xFFFB923C) else ForgedGold,
+                    modifier = Modifier.weight(0.9f)
                 )
             }
 

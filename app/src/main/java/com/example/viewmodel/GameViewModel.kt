@@ -116,9 +116,14 @@ data class LiveRaceState(
     val explored: Set<String> = setOf("1,1"),
     val hiddenRevealed: Set<String> = emptySet(),
     val targetBlock: GridPos? = null,
+    val facingDir: GridPos = GridPos(1, 0),
     val hintPath: List<GridPos> = emptyList(),
     val hitPulseTick: Long = 0L,
     val lastHitPos: GridPos? = null,
+    val lastHitKind: BlockKind? = null,
+    val lastHitBroke: Boolean = false,
+    val lastHitExploded: Boolean = false,
+    val overdriveActive: Boolean = false,
     val score: Int = 0,
     val timer: Int = 200,
     val stamina: Double = 100.0,
@@ -132,7 +137,7 @@ data class LiveRaceState(
     val hasKey: Boolean = false,
     val sonarCharges: Int = 1,
     val sonarActive: Boolean = false,
-    val viewSize: Int = 9,
+    val viewSize: Int = 7,
     val baseVision: Int = 3,
     val currentVision: Int = 3,
     val questBreakDone: Int = 0,
@@ -218,6 +223,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var timerJob: Job? = null
     private var rivalJob: Job? = null
     private var sonarJob: Job? = null
+    private var autoStepJob: Job? = null
     private var toastJob: Job? = null
     private var popupSeq = 0L
     private var hitPulseSeq = 0L
@@ -464,9 +470,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         timerJob?.cancel()
         rivalJob?.cancel()
         sonarJob?.cancel()
+        autoStepJob?.cancel()
         timerJob = null
         rivalJob = null
         sonarJob = null
+        autoStepJob = null
     }
 
     fun onLifecyclePause() {
@@ -500,9 +508,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun cycleZoom() {
         val lr = _uiState.value.liveRace ?: return
         val next = when (lr.viewSize) {
-            9 -> 13
-            13 -> 7
-            else -> 9
+            7 -> 5
+            5 -> 9
+            9 -> 11
+            else -> 7
         }
         _uiState.update { it.copy(liveRace = lr.copy(viewSize = next)) }
     }
@@ -640,25 +649,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             boardSize = lr.boardSize
         )
 
-        if (path.isNullOrEmpty()) {
-            if (lr.isPractice) {
-                val dirs = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
-                for ((dx, dy) in dirs) {
-                    val nx = lr.rivalPos.x + dx
-                    val ny = lr.rivalPos.y + dy
-                    val k = "$nx,$ny"
-                    val b = lr.blocks[k]
-                    if (b != null && rivalRng() < personality.mineBias) {
-                        val updatedBlocks = lr.blocks.toMutableMap()
-                        if (b.hp <= 1) updatedBlocks.remove(k)
-                        else updatedBlocks[k] = b.copy(hp = b.hp - 1)
-                        _uiState.update { it.copy(liveRace = lr.copy(blocks = updatedBlocks)) }
-                        break
-                    }
+        // Smart Tactical Shortcut Mining in Campaign/Practice: Rival can break adjacent weak rock if it cuts a long detour
+        if (lr.isPractice && (path == null || path.size > 14) && rivalRng() < personality.mineBias * 0.65) {
+            val preferredDx = (target.x - lr.rivalPos.x).coerceIn(-1, 1)
+            val preferredDy = (target.y - lr.rivalPos.y).coerceIn(-1, 1)
+            val candidateDirs = listOfNotNull(
+                if (preferredDx != 0) preferredDx to 0 else null,
+                if (preferredDy != 0) 0 to preferredDy else null,
+                1 to 0, 0 to 1, -1 to 0, 0 to -1
+            ).distinct()
+            for ((dx, dy) in candidateDirs) {
+                val nx = lr.rivalPos.x + dx
+                val ny = lr.rivalPos.y + dy
+                if (nx !in 1 until lr.boardSize - 1 || ny !in 1 until lr.boardSize - 1) continue
+                val k = "$nx,$ny"
+                val b = lr.blocks[k]
+                if (b != null && b.special != BlockSpecial.LOCKED && b.hp <= 2) {
+                    val updatedBlocks = lr.blocks.toMutableMap()
+                    if (b.hp <= 1) updatedBlocks.remove(k)
+                    else updatedBlocks[k] = b.copy(hp = b.hp - 1)
+                    _uiState.update { it.copy(liveRace = lr.copy(blocks = updatedBlocks)) }
+                    return
                 }
             }
-            return
         }
+
+        if (path.isNullOrEmpty()) return
 
         val nextStep = path.first()
         if (lr.blocks.containsKey(nextStep.key)) return
@@ -673,11 +689,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * Handles tapping directly on any tile on the Maze Canvas.
+     * Supports 1-tap adjacent move/mine AND smart multi-tile corridor auto-stepping!
      */
     fun onBoardCellTapped(x: Int, y: Int) {
         val lr = _uiState.value.liveRace ?: return
         if (lr.status != RaceStatus.PLAYING || lr.paused) return
         if (x !in 0 until lr.boardSize || y !in 0 until lr.boardSize) return
+        autoStepJob?.cancel()
 
         val dx = x - lr.playerPos.x
         val dy = y - lr.playerPos.y
@@ -692,13 +710,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             liveRace = lr.copy(
                                 hiddenRevealed = lr.hiddenRevealed + key,
-                                targetBlock = GridPos(x, y)
+                                targetBlock = GridPos(x, y),
+                                facingDir = GridPos(dx, dy)
                             )
                         )
                     }
                     showToast(currentStrings().toastHiddenRevealed)
                     return
                 }
+                _uiState.update { it.copy(liveRace = lr.copy(facingDir = GridPos(dx, dy))) }
                 mineAt(GridPos(x, y))
             } else {
                 tryMove(dx, dy)
@@ -706,6 +726,33 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else if (dist == 0) {
             mineTarget()
         } else {
+            // Intelligent multi-tile corridor pathfinder (up to 4 smooth canonical steps along explored open path)
+            val tapKey = "$x,$y"
+            if (tapKey in lr.explored && !lr.blocks.containsKey(tapKey) && dist <= 5) {
+                val miniPath = MazeGenerator.bfsPath(
+                    blocks = lr.blocks,
+                    sx = lr.playerPos.x,
+                    sy = lr.playerPos.y,
+                    tx = x,
+                    ty = y,
+                    allowMine = false,
+                    boardSize = lr.boardSize
+                )
+                if (!miniPath.isNullOrEmpty() && miniPath.size <= 5) {
+                    autoStepJob = viewModelScope.launch {
+                        for (step in miniPath) {
+                            val current = _uiState.value.liveRace ?: break
+                            if (current.status != RaceStatus.PLAYING || current.paused) break
+                            val sdx = step.x - current.playerPos.x
+                            val sdy = step.y - current.playerPos.y
+                            if (abs(sdx) + abs(sdy) != 1) break
+                            tryMove(sdx, sdy)
+                            delay(95L)
+                        }
+                    }
+                    return
+                }
+            }
             val stepDx = if (abs(dx) >= abs(dy)) dx.coerceIn(-1, 1) else 0
             val stepDy = if (abs(dy) > abs(dx)) dy.coerceIn(-1, 1) else 0
             if (stepDx != 0 || stepDy != 0) {
@@ -835,6 +882,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val nextExplored = lr.explored + computeVisibleKeys(curPos, nextVision, lr.boardSize)
         val updatedRace = lr.copy(
             playerPos = curPos,
+            facingDir = GridPos(dx, dy),
             myTrail = trail,
             ghostIndex = lr.ghostIndex + 1,
             explored = nextExplored,
@@ -872,8 +920,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun findFirstAdjacentBlock(lr: LiveRaceState): GridPos? {
-        val dirs = arrayOf(1 to 0, 0 to 1, -1 to 0, 0 to -1)
+        // Prioritize the block directly in front of the miner's facing direction first!
+        val dirs = listOf(
+            lr.facingDir.x to lr.facingDir.y,
+            1 to 0, 0 to 1, -1 to 0, 0 to -1
+        ).distinct()
         for ((dx, dy) in dirs) {
+            if (abs(dx) + abs(dy) != 1) continue
             val p = GridPos(lr.playerPos.x + dx, lr.playerPos.y + dy)
             val b = lr.blocks[p.key]
             if (b != null && (b.special != BlockSpecial.HIDDEN || p.key in lr.hiddenRevealed)) {
@@ -913,8 +966,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         var nextStamina = max(0.0, lr.stamina - cost)
+        val isOverdrive = lr.isPractice && lr.combo >= 4
         var dmg = if (lr.activePower == PowerupType.PICK) 2 else 1
         if (lr.isPractice && profile.value.pickLevel >= 2) {
+            dmg += 1
+        }
+        if (isOverdrive) {
             dmg += 1
         }
 
@@ -929,6 +986,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var nextQuestBreak = lr.questBreakDone
         val nextBlocks = lr.blocks.toMutableMap()
         val newPopups = ArrayList<FloatingPopup>()
+        var didExplode = false
 
         if (remainingHp <= 0) {
             nextBlocks.remove(key)
@@ -936,11 +994,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             nextQuestBreak++
             nextScore += 20
             nextStamina = min(100.0, nextStamina + 4.0)
-            newPopups.add(nextPopup(target.x, target.y, "+20", isPositive = true))
+            newPopups.add(nextPopup(target.x, target.y, if (isOverdrive) "🔥 +20" else "+20", isPositive = true))
 
             var specialFxPlayed = false
             when (block.special) {
                 BlockSpecial.EXPLOSIVE -> {
+                    didExplode = true
                     fx.playExplosion()
                     specialFxPlayed = true
                     showToast(s.toastExplosive)
@@ -1014,9 +1073,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val updatedRace = lr.copy(
             blocks = nextBlocks,
+            facingDir = GridPos(target.x - lr.playerPos.x, target.y - lr.playerPos.y),
             targetBlock = if (remainingHp <= 0) null else target,
             hitPulseTick = hitPulseSeq,
             lastHitPos = target,
+            lastHitKind = block.kind,
+            lastHitBroke = remainingHp <= 0,
+            lastHitExploded = didExplode,
+            overdriveActive = lr.isPractice && nextCombo >= 4,
             score = nextScore,
             timer = nextTimer,
             stamina = nextStamina,
