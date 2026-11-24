@@ -1,0 +1,6 @@
+{
+  "name": "Maze Miner Race",
+  "description": "Deterministic arcade maze mining race with rival AI, 5 biomes, upgrade forge, SQLite anti-cheat leaderboard, and 11 languages.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
