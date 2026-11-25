@@ -1,0 +1,176 @@
+{
+  "entities": {
+    "CloudProfileSave": {
+      "title": "Cloud Profile Save",
+      "description": "Cross-device cloud save backup for a player's Maze Miner Race profile, Forge upgrades, PvP record, Gauntlet status, Abyssal peak floor, and Expedition campaign summary. Strictly private to the owning user.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "description": "Firebase Auth UID of the owning player." },
+        "displayName": { "type": "string", "description": "Player callsign shown in PvP and Community Seeds (1-40 chars)." },
+        "gems": { "type": "integer", "description": "Wallet gem balance." },
+        "streak": { "type": "integer", "description": "Current daily win streak." },
+        "bestStreak": { "type": "integer", "description": "Highest recorded win streak." },
+        "totalWins": { "type": "integer", "description": "Lifetime race victories." },
+        "totalBlocksBroken": { "type": "integer", "description": "Lifetime rock blocks mined." },
+        "totalGemsCollected": { "type": "integer", "description": "Lifetime gems collected." },
+        "pickLevel": { "type": "integer", "description": "Titanium Pickaxe Forge level (0-5)." },
+        "lanternLevel": { "type": "integer", "description": "Lantern Optics Forge level (0-5)." },
+        "staminaLevel": { "type": "integer", "description": "Stamina Flask Forge level (0-5)." },
+        "sonarLevel": { "type": "integer", "description": "Sonar Rig Forge level (0-5)." },
+        "harvesterLevel": { "type": "integer", "description": "Gem Harvester Forge level (0-5)." },
+        "shieldLevel": { "type": "integer", "description": "Blast Shield Forge level (0-3)." },
+        "founderPackOwned": { "type": "boolean", "description": "Whether Founder's Golden Aura is unlocked." },
+        "pvpWins": { "type": "integer", "description": "Live PvP cloud match victories." },
+        "pvpMatches": { "type": "integer", "description": "Total Live PvP cloud matches completed." },
+        "campaignSummary": { "type": "string", "description": "Compact serialized campaign stars and best scores per level." },
+        "gauntletCompleted": { "type": "boolean", "description": "Whether the player completed the First-Run Playable Gauntlet." },
+        "highestAbyssalFloor": { "type": "integer", "description": "Deepest cleared floor in Endless Abyssal Depth (0-999)." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp() on creation." },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Server timestamp set via FieldValue.serverTimestamp() on each sync." }
+      },
+      "required": [
+        "userId", "displayName", "gems", "streak", "bestStreak", "totalWins",
+        "totalBlocksBroken", "totalGemsCollected", "pickLevel", "lanternLevel",
+        "staminaLevel", "sonarLevel", "harvesterLevel", "shieldLevel",
+        "founderPackOwned", "pvpWins", "pvpMatches", "campaignSummary",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "PvpMatchRoom": {
+      "title": "Live PvP Match Room",
+      "description": "Real-time head-to-head PvP cloud matchmaking room where host and guest race the same deterministic braided maze with live coordinates, beacon progress, and terminal winner lock.",
+      "type": "object",
+      "properties": {
+        "roomCode": { "type": "string", "description": "Human-friendly join code (4-12 chars)." },
+        "seed": { "type": "string", "description": "Deterministic maze seed shared by both racers." },
+        "biome": { "type": "string", "enum": ["DESERT", "ICE", "VOLCANO", "CAVERN", "RUINS"] },
+        "boardSize": { "type": "integer", "enum": [15, 19, 21, 25, 29] },
+        "difficulty": { "type": "string", "enum": ["EASY", "NORMAL", "HARD"] },
+        "status": { "type": "string", "enum": ["WAITING", "ACTIVE", "FINISHED"] },
+        "hostUid": { "type": "string" },
+        "hostName": { "type": "string" },
+        "hostX": { "type": "integer" },
+        "hostY": { "type": "integer" },
+        "hostScore": { "type": "integer" },
+        "hostBeacons": { "type": "integer" },
+        "hostFinished": { "type": "boolean" },
+        "guestUid": { "type": "string" },
+        "guestName": { "type": "string" },
+        "guestX": { "type": "integer" },
+        "guestY": { "type": "integer" },
+        "guestScore": { "type": "integer" },
+        "guestBeacons": { "type": "integer" },
+        "guestFinished": { "type": "boolean" },
+        "winnerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "roomCode", "seed", "biome", "boardSize", "difficulty", "status",
+        "hostUid", "hostName", "hostX", "hostY", "hostScore", "hostBeacons", "hostFinished",
+        "guestUid", "guestName", "guestX", "guestY", "guestScore", "guestBeacons", "guestFinished",
+        "winnerUid", "createdAt", "updatedAt"
+      ]
+    },
+    "CommunityMazeSeed": {
+      "title": "Community Maze Seed",
+      "description": "Shareable community maze challenge published by players with biome, board archetype, difficulty, play count, upvotes, and top recorded score.",
+      "type": "object",
+      "properties": {
+        "authorUid": { "type": "string" },
+        "authorName": { "type": "string" },
+        "title": { "type": "string" },
+        "seed": { "type": "string" },
+        "biome": { "type": "string", "enum": ["DESERT", "ICE", "VOLCANO", "CAVERN", "RUINS"] },
+        "boardSize": { "type": "integer", "enum": [15, 19, 21, 25, 29] },
+        "difficulty": { "type": "string", "enum": ["EASY", "NORMAL", "HARD"] },
+        "strategicMaze": { "type": "boolean" },
+        "visibility": { "type": "string", "enum": ["PUBLIC"] },
+        "bestScore": { "type": "integer" },
+        "playsCount": { "type": "integer" },
+        "upvotes": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "authorUid", "authorName", "title", "seed", "biome", "boardSize",
+        "difficulty", "strategicMaze", "visibility", "bestScore", "playsCount",
+        "upvotes", "createdAt", "updatedAt"
+      ]
+    },
+    "DailyRankedGhostEntry": {
+      "title": "Daily Ranked Ghost Entry",
+      "description": "SHA-256 verified Daily Ranked run containing compact deterministic Ghost Racer frame telemetry for asynchronous holographic racing.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "score": { "type": "integer" },
+        "clearTimeMs": { "type": "integer" },
+        "sha256Fingerprint": { "type": "string" },
+        "compressedInputs": { "type": "string" },
+        "submittedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "displayName", "score", "clearTimeMs",
+        "sha256Fingerprint", "compressedInputs", "submittedAt"
+      ]
+    },
+    "AbyssalLeaderboardEntry": {
+      "title": "Abyssal Depth Endless Leaderboard Entry",
+      "description": "SHA-256 fingerprinted Endless Abyssal Depth career peak floor and score for each player.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "highestFloor": { "type": "integer" },
+        "totalScore": { "type": "integer" },
+        "runRootSeed": { "type": "integer" },
+        "runFingerprint": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "displayName", "highestFloor", "totalScore",
+        "runRootSeed", "runFingerprint", "updatedAt"
+      ]
+    },
+    "LiveBalanceConfig": {
+      "title": "Live-Ops Balance Configuration",
+      "description": "Server-managed live tuning parameters for rival pacing, biome trap cycles, fever decay, and Endless Abyssal unlock threshold.",
+      "type": "object",
+      "properties": {
+        "goldieSpeedMultiplier": { "type": "number" },
+        "vexDrillCooldownMs": { "type": "integer" },
+        "ruinsTrapCycleMs": { "type": "integer" },
+        "feverDecayRatePerSec": { "type": "number" },
+        "endlessModeUnlockStars": { "type": "integer" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/CloudProfileSave" },
+      "description": "Private cross-device cloud save document keyed by Firebase Auth UID."
+    },
+    "/pvp_rooms/{roomId}": {
+      "schema": { "$ref": "#/entities/PvpMatchRoom" },
+      "description": "Live head-to-head PvP cloud matchmaking and real-time race telemetry rooms."
+    },
+    "/community_seeds/{seedId}": {
+      "schema": { "$ref": "#/entities/CommunityMazeSeed" },
+      "description": "Public shareable community maze seeds catalog with play counters and upvotes."
+    },
+    "/daily_ranked/{dateKey}/entries/{userId}": {
+      "schema": { "$ref": "#/entities/DailyRankedGhostEntry" },
+      "description": "Daily Ranked verified personal-best runs and deterministic Ghost Racer streams."
+    },
+    "/abyssal_leaderboard/{userId}": {
+      "schema": { "$ref": "#/entities/AbyssalLeaderboardEntry" },
+      "description": "Endless Abyssal Depth peak floor cloud leaderboard."
+    },
+    "/live_config/{docId}": {
+      "schema": { "$ref": "#/entities/LiveBalanceConfig" },
+      "description": "Read-only Live-Ops balance tuning document."
+    }
+  }
+}

@@ -8,6 +8,11 @@ import com.example.audio.SoundFxEngine
 import com.example.billing.BillingManager
 import com.example.billing.BillingUiState
 import com.example.billing.StorePackSpec
+import com.example.cloud.CloudProfileSave
+import com.example.cloud.CommunityMazeSeed
+import com.example.cloud.DailyRankedGhostEntry
+import com.example.cloud.PvpMatchRoom
+import com.example.cloud.PvpRoomStatus
 import com.example.data.CampaignProgressEntity
 import com.example.data.GameDatabase
 import com.example.data.GameRepository
@@ -16,6 +21,7 @@ import com.example.data.PlayerProfileEntity
 import com.example.data.SessionResponseDto
 import com.example.data.hasAchievement
 import com.example.data.withAchievement
+import com.example.engine.AbyssalDepthGenerator
 import com.example.engine.AchievementId
 import com.example.engine.Biome
 import com.example.engine.BlockKind
@@ -29,13 +35,22 @@ import com.example.engine.Difficulty
 import com.example.engine.EngineSelfTestResult
 import com.example.engine.FINISH_X
 import com.example.engine.FINISH_Y
+import com.example.engine.FirstRunGauntletController
+import com.example.engine.GauntletStep
+import com.example.engine.GhostFrame
+import com.example.engine.GhostReplayCodec
 import com.example.engine.GridPos
+import com.example.engine.LiveBalanceConfig
 import com.example.engine.MAZE_SIZE
 import com.example.engine.MazeGenerator
+import com.example.engine.MinerAbility
 import com.example.engine.Modifier
+import com.example.engine.MoveDir
 import com.example.engine.PowerupType
+import com.example.engine.Replay16BitCodec
 import com.example.engine.ReplayAction
 import com.example.engine.ReplaySimulator
+import com.example.engine.ReplayTickInput
 import com.example.engine.RivalPersonality
 import com.example.engine.START_X
 import com.example.engine.START_Y
@@ -72,6 +87,7 @@ enum class AppScreen {
 
 enum class HubTab {
     RACE,
+    CLOUD,
     FORGE,
     RANKS,
     SETTINGS
@@ -100,6 +116,10 @@ data class LiveRaceState(
     val isPractice: Boolean,
     val boardSize: Int = MAZE_SIZE,
     val finishPos: GridPos = GridPos(FINISH_X, FINISH_Y),
+    val checkpoints: List<GridPos> = emptyList(),
+    val playerCheckpointsCleared: Set<String> = emptySet(),
+    val rivalCheckpointsCleared: Set<String> = emptySet(),
+    val totalCircuitSpan: Int = 1,
     val campaignLevelId: Int? = null,
     val campaignTitle: String? = null,
     val starsEarned: Int = 0,
@@ -113,6 +133,8 @@ data class LiveRaceState(
     val gems: Set<String> = emptySet(),
     val powers: Map<String, PowerupType> = emptyMap(),
     val traps: Set<String> = emptySet(),
+    val lavaPuddles: Set<String> = emptySet(),
+    val sandDrifts: Set<String> = emptySet(),
     val explored: Set<String> = setOf("1,1"),
     val hiddenRevealed: Set<String> = emptySet(),
     val targetBlock: GridPos? = null,
@@ -123,7 +145,16 @@ data class LiveRaceState(
     val lastHitKind: BlockKind? = null,
     val lastHitBroke: Boolean = false,
     val lastHitExploded: Boolean = false,
+    val lastBlastOrigins: List<GridPos> = emptyList(),
+    val lastChainDepth: Int = 0,
+    val feverCharge: Int = 0,
+    val feverRemainingSec: Int = 0,
+    val comboTimerTicks: Int = 0,
+    val surgeCooldownTicks: Int = 0,
+    val surgePulseTick: Long = 0L,
     val overdriveActive: Boolean = false,
+    val unlockedAbilities: Set<MinerAbility> = setOf(MinerAbility.QUICK_STEP),
+    val newlyUnlockedAbility: MinerAbility? = null,
     val score: Int = 0,
     val timer: Int = 200,
     val stamina: Double = 100.0,
@@ -147,8 +178,41 @@ data class LiveRaceState(
     val loseReason: String? = null,
     val popups: List<FloatingPopup> = emptyList(),
     val lastVerifyResult: VerifyResult? = null,
-    val lastBreakdown: ScoreBreakdown? = null
-)
+    val lastBreakdown: ScoreBreakdown? = null,
+    val pvpRoomId: String? = null,
+    val pvpRoomCode: String? = null,
+    val pvpOpponentName: String? = null,
+    val pvpAsHost: Boolean = false,
+    val pvpOpponentScore: Int = 0,
+    val pvpOpponentBeacons: Int = 0,
+    val ghostFrames: List<GhostFrame> = emptyList(),
+    val ghostRacerName: String? = null,
+    val compressedReplay16Bit: String? = null,
+    val clearTimeMs: Long = 0L,
+    val abyssalFloor: Int? = null,
+    val abyssalRootSeed: Long? = null,
+    val abyssalCumulativeScore: Int = 0,
+    val abyssalAiScalar: Float = 1f,
+    val abyssalGemMultiplier: Float = 1f,
+    val abyssalFingerprint: String? = null,
+    val isGauntlet: Boolean = false,
+    val gauntletStep: GauntletStep = GauntletStep.COMPLETED,
+    val liveBalance: LiveBalanceConfig = LiveBalanceConfig()
+) {
+    val remainingPlayerCheckpoints: List<GridPos>
+        get() = checkpoints.filter { it.key !in playerCheckpointsCleared }
+
+    val remainingRivalCheckpoints: List<GridPos>
+        get() = checkpoints.filter { it.key !in rivalCheckpointsCleared }
+
+    val portalUnlocked: Boolean
+        get() = checkpoints.isEmpty() || playerCheckpointsCleared.size >= checkpoints.size
+
+    val nextPlayerObjective: GridPos
+        get() = remainingPlayerCheckpoints.minByOrNull {
+            abs(it.x - playerPos.x) + abs(it.y - playerPos.y)
+        } ?: finishPos
+}
 
 data class GameUiState(
     val screen: AppScreen = AppScreen.LAUNCH,
@@ -157,6 +221,7 @@ data class GameUiState(
     val selectedDifficulty: Difficulty = Difficulty.NORMAL,
     val selectedRival: RivalPersonality = RivalPersonality.RUBBLE,
     val selectedArchetype: BoardArchetype = BoardArchetype.CLASSIC_21,
+    val selectedBiomeOverride: Biome? = null,
     val liveRace: LiveRaceState? = null,
     val lastVerifiedReceipt: VerifyResult? = null,
     val selfTestResults: List<EngineSelfTestResult> = emptyList(),
@@ -189,6 +254,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             )
         },
         onPurchaseVerified = { pack -> onVerifiedPackPurchase(pack) },
+        onNonConsumableRestored = { pack ->
+            if (pack.unlocksFounderAura) {
+                viewModelScope.launch {
+                    repository.updateProfile { cur ->
+                        if (cur.founderPackOwned) cur else cur.copy(founderPackOwned = true)
+                    }
+                }
+            }
+        },
         onBillingNotice = { msg -> showToast(msg) }
     )
 
@@ -219,6 +293,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var gameplayRng: () -> Double = { 0.5 }
     private var rivalRng: () -> Double = { 0.5 }
     private val recordedActions = ArrayList<ReplayAction>()
+    private val recordedTickInputs = ArrayList<ReplayTickInput>()
+    private val gauntletController = FirstRunGauntletController()
+    private var activeLiveBalance: LiveBalanceConfig = LiveBalanceConfig()
+    private var raceStartElapsedMs: Long = 0L
     private var remoteSession: SessionResponseDto? = null
     private var timerJob: Job? = null
     private var rivalJob: Job? = null
@@ -227,6 +305,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     private var toastJob: Job? = null
     private var popupSeq = 0L
     private var hitPulseSeq = 0L
+    private var quickRaceCounter = 0
 
     init {
         billingManager.startConnection()
@@ -296,10 +375,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         _uiState.update { it.copy(selectedArchetype = archetype) }
     }
 
+    fun setBiomeOverride(biome: Biome?) {
+        _uiState.update { it.copy(selectedBiomeOverride = biome) }
+    }
+
     fun startRace(practice: Boolean = false, seedOverride: String? = null) {
         val state = _uiState.value
         val seed = (seedOverride ?: state.seedInput.trim()).ifEmpty { todayUtcSeed() }
-        val biome = MazeGenerator.biomeForSeed(seed)
+        val biome = if (practice && state.selectedBiomeOverride != null) {
+            state.selectedBiomeOverride
+        } else {
+            MazeGenerator.biomeForSeed(seed)
+        }
         val modifier = MazeGenerator.modifierForSeed(seed)
         val boardSize = if (practice) state.selectedArchetype.size else MAZE_SIZE
         launchBoardSession(
@@ -321,14 +408,51 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             modifier = level.modifier,
             biome = level.biome,
             rival = level.rival,
-            isPractice = true, // Enables Forge upgrades & multi-board sizing while awarding campaign stars
+            isPractice = true, // Enables Forge upgrades, unlocked abilities & multi-board sizing while awarding campaign stars
             boardSize = level.archetype.size,
             campaignLevel = level
         )
     }
 
+    fun startNextPlayableCampaignLevel() {
+        val cleared = campaignProgress.value.filter { it.stars > 0 }.map { it.levelId }.toSet()
+        val nextLevel = CampaignCatalog.nextRecommendedLevel(cleared)
+        startCampaignLevel(nextLevel)
+    }
+
+    fun startBoardQuickPlay(archetype: BoardArchetype) {
+        _uiState.update { it.copy(selectedArchetype = archetype) }
+        val state = _uiState.value
+        val baseSeed = state.seedInput.trim().ifEmpty { todayUtcSeed() }
+        val boardSeed = "$baseSeed-${archetype.size}x${archetype.size}"
+        val biome = state.selectedBiomeOverride ?: MazeGenerator.biomeForSeed(boardSeed)
+        val modifier = MazeGenerator.modifierForSeed(boardSeed)
+        launchBoardSession(
+            seed = boardSeed,
+            difficulty = state.selectedDifficulty,
+            modifier = modifier,
+            biome = biome,
+            rival = state.selectedRival,
+            isPractice = true,
+            boardSize = archetype.size,
+            campaignLevel = null
+        )
+    }
+
     fun replayCurrentRace() {
         val lr = _uiState.value.liveRace
+        if (lr?.isGauntlet == true) {
+            startFirstRunGauntlet()
+            return
+        }
+        if (lr?.abyssalFloor != null && lr.abyssalRootSeed != null) {
+            startAbyssalDescent(
+                rootSeed = lr.abyssalRootSeed,
+                floorNumber = lr.abyssalFloor,
+                cumulativeScore = (lr.abyssalCumulativeScore - lr.score).coerceAtLeast(0)
+            )
+            return
+        }
         if (lr?.campaignLevelId != null) {
             val lvl = CampaignCatalog.byId(lr.campaignLevelId)
             if (lvl != null) {
@@ -340,14 +464,272 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startNextCampaignLevel() {
-        val currentId = _uiState.value.liveRace?.campaignLevelId ?: return
-        val next = CampaignCatalog.byId(currentId + 1)
-        if (next != null) {
-            startCampaignLevel(next)
-        } else {
-            openHub(HubTab.RACE)
-            showToast("🏆 All 15 Expedition Levels Completed!")
+        startNextRace()
+    }
+
+    /**
+     * One-tap Next Race across all modes:
+     * - First-Run Gauntlet: launches straight into Expedition Lv. 1
+     * - Endless Abyssal Depth: descends to Floor N+1 with deterministic bit-mixed seed
+     * - Expedition Campaign: advances cleanly to Lv. X+1
+     * - Quick-Play / Practice / Daily Ranked: launches a fresh randomized maze
+     */
+    fun startNextRace() {
+        fx.playNextRace()
+        val lr = _uiState.value.liveRace
+        if (lr?.isGauntlet == true) {
+            startNextPlayableCampaignLevel()
+            return
         }
+        if (lr?.abyssalFloor != null && lr.abyssalRootSeed != null) {
+            startAbyssalDescent(
+                rootSeed = lr.abyssalRootSeed,
+                floorNumber = lr.abyssalFloor + 1,
+                cumulativeScore = lr.abyssalCumulativeScore
+            )
+            return
+        }
+        val currentCampaignId = lr?.campaignLevelId
+        if (currentCampaignId != null) {
+            val next = CampaignCatalog.byId(currentCampaignId + 1)
+            if (next != null) {
+                startCampaignLevel(next)
+                return
+            }
+        }
+
+        quickRaceCounter++
+        val state = _uiState.value
+        val archetype = if (lr != null) {
+            BoardArchetype.entries.firstOrNull { it.size == lr.boardSize } ?: state.selectedArchetype
+        } else {
+            state.selectedArchetype
+        }
+        val salt = (System.currentTimeMillis() % 9973L).toInt()
+        val freshSeed = "race-${quickRaceCounter}-$salt-${archetype.size}"
+        // Guarantee a fresh biome transition from the previous race so Next Race always feels visually distinct
+        val biomes = Biome.entries
+        val derivedBiome = MazeGenerator.biomeForSeed(freshSeed)
+        val nextBiome = if (lr != null && derivedBiome == lr.biome) {
+            biomes[(derivedBiome.ordinal + 1) % biomes.size]
+        } else {
+            derivedBiome
+        }
+        val nextModifier = MazeGenerator.modifierForSeed(freshSeed)
+        launchBoardSession(
+            seed = freshSeed,
+            difficulty = lr?.difficulty ?: state.selectedDifficulty,
+            modifier = nextModifier,
+            biome = nextBiome,
+            rival = lr?.rivalPersonality ?: state.selectedRival,
+            isPractice = true,
+            boardSize = archetype.size,
+            campaignLevel = null
+        )
+    }
+
+    fun startPvpRace(room: PvpMatchRoom, currentUid: String) {
+        val asHost = room.hostUid == currentUid
+        val opponentName = if (asHost) {
+            room.guestName.ifBlank { "Challenger" }
+        } else {
+            room.hostName.ifBlank { "Host" }
+        }
+        launchBoardSession(
+            seed = room.seed,
+            difficulty = room.parsedDifficulty(),
+            modifier = Modifier.NORMAL,
+            biome = room.parsedBiome(),
+            rival = RivalPersonality.VEX,
+            isPractice = true,
+            boardSize = room.boardSize.toInt(),
+            campaignLevel = null,
+            pvpRoomId = room.id,
+            pvpRoomCode = room.roomCode,
+            pvpOpponentName = opponentName,
+            pvpAsHost = asHost
+        )
+        showToast("⚔️ LIVE PVP ${room.roomCode} vs $opponentName! Race to sync Beacons & Portal!")
+    }
+
+    fun startCommunitySeedRace(seed: CommunityMazeSeed) {
+        launchBoardSession(
+            seed = seed.seed,
+            difficulty = seed.parsedDifficulty(),
+            modifier = MazeGenerator.modifierForSeed(seed.seed),
+            biome = seed.parsedBiome(),
+            rival = _uiState.value.selectedRival,
+            isPractice = true,
+            boardSize = seed.boardSize.toInt(),
+            campaignLevel = null
+        )
+        showToast("🌍 Community Challenge: ${seed.title} by ${seed.authorName}")
+    }
+
+    fun syncLivePvpOpponentState(room: PvpMatchRoom, currentUid: String) {
+        val lr = _uiState.value.liveRace ?: return
+        if (lr.pvpRoomId != room.id || lr.status != RaceStatus.PLAYING) return
+        val asHost = room.hostUid == currentUid
+        val oppX = (if (asHost) room.guestX else room.hostX).toInt().coerceIn(0, lr.boardSize - 1)
+        val oppY = (if (asHost) room.guestY else room.hostY).toInt().coerceIn(0, lr.boardSize - 1)
+        val oppScore = (if (asHost) room.guestScore else room.hostScore).toInt()
+        val oppBeacons = (if (asHost) room.guestBeacons else room.hostBeacons).toInt()
+        val oppFinished = if (asHost) room.guestFinished else room.hostFinished
+        val oppName = if (asHost) room.guestName.ifBlank { "Challenger" } else room.hostName.ifBlank { "Host" }
+
+        val syncedRivalBeacons = lr.checkpoints.take(oppBeacons.coerceAtMost(lr.checkpoints.size)).map { it.key }.toSet()
+        _uiState.update { cur ->
+            val current = cur.liveRace ?: return@update cur
+            if (current.pvpRoomId != room.id) return@update cur
+            cur.copy(
+                liveRace = current.copy(
+                    rivalPos = GridPos(oppX, oppY),
+                    rivalCheckpointsCleared = syncedRivalBeacons,
+                    pvpOpponentName = oppName,
+                    pvpOpponentScore = oppScore,
+                    pvpOpponentBeacons = oppBeacons
+                )
+            )
+        }
+
+        if (room.parsedStatus() == PvpRoomStatus.FINISHED && room.winnerUid.isNotBlank() && room.winnerUid != currentUid && oppFinished) {
+            finishAsLoss("⚔️ $oppName finished first in PvP Room ${room.roomCode}!", lr.tickCount, lr.stamina)
+        }
+    }
+
+    fun applyCloudMergedSave(cloud: CloudProfileSave) {
+        viewModelScope.launch {
+            repository.applyCloudMergedSave(cloud)
+        }
+    }
+
+    fun updateLiveBalanceConfig(config: LiveBalanceConfig) {
+        activeLiveBalance = config
+        _uiState.update { cur ->
+            val lr = cur.liveRace ?: return@update cur
+            cur.copy(liveRace = lr.copy(liveBalance = config))
+        }
+    }
+
+    /**
+     * Launches today's canonical 21×21 Daily Ranked maze racing live against a verified cloud Ghost Racer.
+     */
+    fun startDailyWithGhost(ghost: DailyRankedGhostEntry, dateSeed: String = todayUtcSeed()) {
+        val decodedFrames = runCatching {
+            val ticks = Replay16BitCodec.decodeFromBase64(ghost.compressedInputs)
+            Replay16BitCodec.toGhostFrames(ticks, boardSize = MAZE_SIZE)
+        }.getOrElse {
+            GhostReplayCodec.decodeFrames(ghost.compressedInputs)
+        }
+        val biome = MazeGenerator.biomeForSeed(dateSeed)
+        val modifier = MazeGenerator.modifierForSeed(dateSeed)
+        launchBoardSession(
+            seed = dateSeed,
+            difficulty = _uiState.value.selectedDifficulty,
+            modifier = modifier,
+            biome = biome,
+            rival = _uiState.value.selectedRival,
+            isPractice = false,
+            boardSize = MAZE_SIZE,
+            campaignLevel = null,
+            ghostFramesOverride = decodedFrames,
+            ghostRacerName = ghost.displayName
+        )
+    }
+
+    /**
+     * Launches an Endless Abyssal Depth procedural floor (1..∞) using deterministic SplitMix + Mulberry32.
+     */
+    fun startAbyssalDescent(
+        rootSeed: Long = (System.currentTimeMillis() % 899_999L) + 100_000L,
+        floorNumber: Int = 1,
+        cumulativeScore: Int = 0
+    ) {
+        val cfg = AbyssalDepthGenerator.generateFloorConfig(rootSeed, floorNumber)
+        val floorSeedStr = "abyss-$rootSeed-f${cfg.floorNumber}-${cfg.floorSeed.toString(16).takeLast(6)}"
+        val biome = cfg.biome.toBiome()
+        val difficulty = when {
+            cfg.floorNumber >= 10 -> Difficulty.HARD
+            cfg.floorNumber >= 4 -> Difficulty.NORMAL
+            else -> Difficulty.EASY
+        }
+        val rival = RivalPersonality.entries[cfg.floorNumber % RivalPersonality.entries.size]
+        launchBoardSession(
+            seed = floorSeedStr,
+            difficulty = difficulty,
+            modifier = Modifier.NORMAL,
+            biome = biome,
+            rival = rival,
+            isPractice = true,
+            boardSize = cfg.boardSize,
+            campaignLevel = null,
+            abyssalFloor = cfg.floorNumber,
+            abyssalRootSeed = rootSeed,
+            abyssalCumulativeScore = cumulativeScore,
+            abyssalAiScalar = cfg.aiAggressionScalar,
+            abyssalGemMultiplier = cfg.gemMultiplier,
+            abyssalParTimerOverride = cfg.parTimeSeconds
+        )
+    }
+
+    /**
+     * Launches the interactive, diegetic First-Run Playable Gauntlet (zero walls of text):
+     * Swipe to Dig -> Detonate TNT -> Charge Beacon -> Tap Surge -> Escape Portal.
+     */
+    fun startFirstRunGauntlet() {
+        stopRaceLoops()
+        gauntletController.reset()
+        recordedActions.clear()
+        recordedTickInputs.clear()
+        raceStartElapsedMs = System.currentTimeMillis()
+        remoteSession = null
+
+        val generated = FirstRunGauntletController.buildGauntletMaze()
+        val startPos = FirstRunGauntletController.GAUNTLET_START
+        val finishPos = GridPos(generated.finishX, generated.finishY)
+        val baseVision = 5
+        val initialExplored = computeVisibleKeys(startPos, baseVision, generated.boardSize)
+        val totalSpan = MazeGenerator.computeCircuitDistance(startPos, generated.checkpoints, finishPos).coerceAtLeast(1)
+
+        val live = LiveRaceState(
+            seed = "first-run-gauntlet",
+            difficulty = Difficulty.EASY,
+            modifier = Modifier.NORMAL,
+            biome = Biome.CAVERN,
+            rivalPersonality = RivalPersonality.MOSS,
+            isPractice = true,
+            boardSize = generated.boardSize,
+            finishPos = finishPos,
+            checkpoints = generated.checkpoints,
+            totalCircuitSpan = totalSpan,
+            playerPos = startPos,
+            rivalPos = GridPos(1, 1),
+            myTrail = listOf(startPos),
+            unlockedAbilities = setOf(MinerAbility.QUICK_STEP, MinerAbility.FEVER_OVERDRIVE),
+            blocks = generated.blocks,
+            gems = generated.gems,
+            powers = generated.powers,
+            explored = initialExplored,
+            timer = 180,
+            sonarCharges = 2,
+            viewSize = 7,
+            baseVision = baseVision,
+            currentVision = baseVision,
+            isGauntlet = true,
+            gauntletStep = gauntletController.currentStep.value,
+            liveBalance = activeLiveBalance
+        )
+
+        _uiState.update {
+            it.copy(
+                screen = AppScreen.PLAYING,
+                liveRace = live
+            )
+        }
+        syncSoundtrackContext(live, pausedOverride = false)
+        fx.startSoundtrack(Biome.CAVERN)
+        showToast("⛏️ GAUNTLET: Swipe right to dig through the dirt wall!")
+        startRaceLoops(RivalPersonality.MOSS, aiScalar = 0f)
     }
 
     private fun launchBoardSession(
@@ -358,12 +740,33 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         rival: RivalPersonality,
         isPractice: Boolean,
         boardSize: Int,
-        campaignLevel: CampaignLevel?
+        campaignLevel: CampaignLevel?,
+        pvpRoomId: String? = null,
+        pvpRoomCode: String? = null,
+        pvpOpponentName: String? = null,
+        pvpAsHost: Boolean = false,
+        ghostFramesOverride: List<GhostFrame> = emptyList(),
+        ghostRacerName: String? = null,
+        abyssalFloor: Int? = null,
+        abyssalRootSeed: Long? = null,
+        abyssalCumulativeScore: Int = 0,
+        abyssalAiScalar: Float = 1f,
+        abyssalGemMultiplier: Float = 1f,
+        abyssalParTimerOverride: Int? = null
     ) {
         stopRaceLoops()
         val prof = profile.value
-        val generated = MazeGenerator.genMaze(seed, boardSize)
+        // Daily Ranked 21x21 stays strictly canonical at (19,19) for 0-tolerance SHA-256 verification;
+        // Expedition Campaign & Quick-Play/Practice boards build strategic braided labyrinths with
+        // multi-quadrant Relay Beacons and unpredictable far finish portals!
+        val generated = MazeGenerator.genMaze(
+            seed = seed,
+            boardSize = boardSize,
+            randomEndpoint = isPractice,
+            strategicMaze = isPractice
+        )
         val finishPos = GridPos(generated.finishX, generated.finishY)
+        val checkpointKeys = generated.checkpoints.map { it.key }.toSet()
 
         // Separate RNG streams: gameplayRng matches ReplaySimulator bit-for-bit on 21x21 Ranked!
         gameplayRng = DeterministicRng.mulberry(
@@ -373,10 +776,22 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             DeterministicRng.fnv1aHash("$seed|rival|${rival.wireName}")
         )
         recordedActions.clear()
+        recordedTickInputs.clear()
+        raceStartElapsedMs = System.currentTimeMillis()
         remoteSession = null
 
         val traps = if (biome == Biome.RUINS) {
-            MazeGenerator.generateRuinsTraps(seed, generated.maze, generated.boardSize)
+            MazeGenerator.generateRuinsTraps(seed, generated.maze, generated.boardSize) - finishPos.key - checkpointKeys
+        } else {
+            emptySet()
+        }
+        val lavaPuddles = if (isPractice && biome == Biome.VOLCANO) {
+            MazeGenerator.generateVolcanoLavaPuddles(seed, generated.maze, generated.boardSize) - finishPos.key - "1,1" - checkpointKeys
+        } else {
+            emptySet()
+        }
+        val sandDrifts = if (isPractice && biome == Biome.DESERT) {
+            MazeGenerator.generateDesertSandDrifts(seed, generated.maze, generated.boardSize) - finishPos.key - "1,1" - checkpointKeys
         } else {
             emptySet()
         }
@@ -389,13 +804,44 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             baseVision += prof.lanternLevel.coerceAtMost(3)
         }
 
-        val startingSonar = if (modifier == Modifier.NO_SONAR) {
-            if (isPractice && prof.sonarLevel > 0) 1 else 0
+        val clearedLevels = campaignProgress.value.filter { it.stars > 0 }.map { it.levelId }.toSet()
+        val activeAbilities = if (isPractice) {
+            CampaignCatalog.unlockedAbilities(clearedLevels)
         } else {
-            1 + if (isPractice) prof.sonarLevel.coerceAtMost(3) else 0
+            setOf(MinerAbility.QUICK_STEP)
         }
 
+        val bonusSonarFromAbility = if (isPractice && MinerAbility.CRYSTAL_MAGNET in activeAbilities) 1 else 0
+        val startingSonar = if (modifier == Modifier.NO_SONAR) {
+            (if (isPractice && prof.sonarLevel > 0) 1 else 0) + bonusSonarFromAbility
+        } else {
+            1 + (if (isPractice) prof.sonarLevel.coerceAtMost(3) else 0) + bonusSonarFromAbility
+        }
+
+        // Expand race clock for multi-beacon strategic labyrinths while keeping Daily Ranked canonical
+        val strategicTimeExpansion = if (isPractice) {
+            when {
+                generated.boardSize >= 29 -> 140
+                generated.boardSize >= 25 -> 95
+                generated.boardSize >= 19 -> 55
+                else -> 20
+            }
+        } else {
+            0
+        }
+        val startTimer = abyssalParTimerOverride ?: (
+            difficulty.startTimer +
+                strategicTimeExpansion +
+                if (isPractice && MinerAbility.MASTER_DRILL in activeAbilities) 15 else 0
+            )
+        val startShield = isPractice && MinerAbility.AEGIS_START in activeAbilities
+
         val initialExplored = computeVisibleKeys(GridPos(START_X, START_Y), baseVision, generated.boardSize)
+        val totalCircuitSpan = MazeGenerator.computeCircuitDistance(
+            from = GridPos(START_X, START_Y),
+            uncapturedBeacons = generated.checkpoints,
+            finishPos = finishPos
+        ).coerceAtLeast(1)
 
         val live = LiveRaceState(
             seed = seed,
@@ -406,23 +852,42 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             isPractice = isPractice,
             boardSize = generated.boardSize,
             finishPos = finishPos,
+            checkpoints = generated.checkpoints,
+            totalCircuitSpan = totalCircuitSpan,
             campaignLevelId = campaignLevel?.id,
             campaignTitle = campaignLevel?.title,
+            unlockedAbilities = activeAbilities,
             blocks = generated.blocks,
             gems = generated.gems,
             powers = generated.powers,
             traps = traps,
+            lavaPuddles = lavaPuddles,
+            sandDrifts = sandDrifts,
             explored = initialExplored,
-            timer = difficulty.startTimer,
+            timer = startTimer,
+            activePower = if (startShield) PowerupType.SHIELD else null,
+            powerUntilTick = if (startShield) 15 else -1,
             sonarCharges = startingSonar,
             baseVision = baseVision,
-            currentVision = baseVision
+            currentVision = baseVision,
+            pvpRoomId = pvpRoomId,
+            pvpRoomCode = pvpRoomCode,
+            pvpOpponentName = pvpOpponentName,
+            pvpAsHost = pvpAsHost,
+            ghostFrames = ghostFramesOverride,
+            ghostRacerName = ghostRacerName,
+            abyssalFloor = abyssalFloor,
+            abyssalRootSeed = abyssalRootSeed,
+            abyssalCumulativeScore = abyssalCumulativeScore,
+            abyssalAiScalar = abyssalAiScalar,
+            abyssalGemMultiplier = abyssalGemMultiplier,
+            liveBalance = activeLiveBalance
         )
 
         _uiState.update {
             it.copy(
                 screen = AppScreen.PLAYING,
-                seedInput = if (campaignLevel == null) seed else it.seedInput,
+                seedInput = if (campaignLevel == null && abyssalFloor == null) seed else it.seedInput,
                 liveRace = live
             )
         }
@@ -432,7 +897,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val ghost = repository.getGhostTrail(seed)
             _uiState.update { cur ->
                 val lr = cur.liveRace ?: return@update cur
-                cur.copy(liveRace = lr.copy(ghostTrail = ghost))
+                val fallbackFrames = if (lr.ghostFrames.isEmpty() && ghost.isNotEmpty()) {
+                    GhostReplayCodec.framesFromTrail(ghost, max(ghost.size, 20))
+                } else {
+                    lr.ghostFrames
+                }
+                cur.copy(liveRace = lr.copy(ghostTrail = ghost, ghostFrames = fallbackFrames))
             }
         }
         if (!isPractice && prof.verifierServerUrl.isNotBlank()) {
@@ -441,26 +911,64 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Start adaptive biome soundtrack
-        fx.updateSoundtrackContext(biome, difficulty.startTimer, combo = 0, paused = false)
+        // Start adaptive biome soundtrack with live spatial race telemetry
+        syncSoundtrackContext(live, pausedOverride = false)
         fx.startSoundtrack(biome)
 
-        val banner = campaignLevel?.let { "Lv.${it.id} ${it.title} • ${it.archetype.label}" }
-            ?: AppStrings.biomeDesc(currentStrings(), biome)
+        val beaconHint = if (generated.checkpoints.isNotEmpty()) {
+            " • Sync ${generated.checkpoints.size} Relay Beacons to unlock Portal!"
+        } else {
+            ""
+        }
+        val banner = when {
+            abyssalFloor != null -> "🕳️ ABYSSAL FLOOR $abyssalFloor • ${biome.wireName} ${generated.boardSize}×${generated.boardSize} (${String.format(Locale.US, "%.2f", abyssalGemMultiplier)}× Gems)"
+            ghostRacerName != null -> "👻 DAILY RANKED vs Ghost $ghostRacerName • ${biome.wireName}"
+            campaignLevel != null -> "Lv.${campaignLevel.id} ${campaignLevel.title} • ${campaignLevel.archetype.label}$beaconHint"
+            else -> "${biome.wireName} • ${AppStrings.biomeDesc(currentStrings(), biome)}$beaconHint"
+        }
         showToast(banner)
-        startRaceLoops(rival)
+        startRaceLoops(rival, aiScalar = abyssalAiScalar)
     }
 
-    private fun startRaceLoops(rival: RivalPersonality) {
+    private fun syncSoundtrackContext(race: LiveRaceState, pausedOverride: Boolean = race.paused) {
+        val playerDist = MazeGenerator.computeCircuitDistance(
+            from = race.playerPos,
+            uncapturedBeacons = race.remainingPlayerCheckpoints,
+            finishPos = race.finishPos
+        )
+        val rivalDist = MazeGenerator.computeCircuitDistance(
+            from = race.rivalPos,
+            uncapturedBeacons = race.remainingRivalCheckpoints,
+            finishPos = race.finishPos
+        )
+        fx.updateSoundtrackContext(
+            biome = race.biome,
+            timerRemaining = race.timer,
+            combo = race.combo,
+            paused = pausedOverride,
+            rivalDistToFinish = rivalDist,
+            playerDistToFinish = playerDist,
+            overdriveActive = race.overdriveActive
+        )
+    }
+
+    private fun startRaceLoops(rival: RivalPersonality, aiScalar: Float = 1f) {
         timerJob = viewModelScope.launch {
             while (true) {
                 delay(1000L)
                 onGameTick()
             }
         }
+        if (aiScalar <= 0f) return
+        val tunedBaseMs = when (rival) {
+            RivalPersonality.GOLDIE -> (rival.stepIntervalMs / activeLiveBalance.goldieSpeedMultiplier).toLong()
+            RivalPersonality.VEX -> (activeLiveBalance.vexDrillCooldownMs / 2L).coerceIn(360L, 1200L)
+            else -> rival.stepIntervalMs
+        }
+        val finalDelayMs = (tunedBaseMs / aiScalar.coerceIn(0.6f, 1.8f)).toLong().coerceAtLeast(240L)
         rivalJob = viewModelScope.launch {
             while (true) {
-                delay(rival.stepIntervalMs)
+                delay(finalDelayMs)
                 onRivalTick()
             }
         }
@@ -479,7 +987,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onLifecyclePause() {
         val lr = _uiState.value.liveRace ?: return
-        fx.updateSoundtrackContext(lr.biome, lr.timer, lr.combo, paused = true)
+        syncSoundtrackContext(lr, pausedOverride = true)
         if (_uiState.value.screen == AppScreen.PLAYING && lr.status == RaceStatus.PLAYING && !lr.paused) {
             _uiState.update { it.copy(liveRace = lr.copy(paused = true)) }
             showToast(currentStrings().toastAutoPaused)
@@ -489,7 +997,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     fun onLifecycleResume() {
         val lr = _uiState.value.liveRace ?: return
         if (_uiState.value.screen == AppScreen.PLAYING && lr.status == RaceStatus.PLAYING && !lr.paused) {
-            fx.updateSoundtrackContext(lr.biome, lr.timer, lr.combo, paused = false)
+            syncSoundtrackContext(lr, pausedOverride = false)
             if (profile.value.musicEnabled) fx.startSoundtrack(lr.biome)
         }
     }
@@ -498,7 +1006,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val lr = _uiState.value.liveRace ?: return
         if (lr.status != RaceStatus.PLAYING) return
         val nextPaused = !lr.paused
-        fx.updateSoundtrackContext(lr.biome, lr.timer, lr.combo, paused = nextPaused)
+        syncSoundtrackContext(lr, pausedOverride = nextPaused)
         if (!nextPaused && profile.value.musicEnabled) {
             fx.startSoundtrack(lr.biome)
         }
@@ -528,23 +1036,29 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         fx.playSonar()
         val expandedVision = 9
-        val newExplored = lr.explored + computeVisibleKeys(lr.playerPos, expandedVision, lr.boardSize)
+        val beaconPingKeys = lr.remainingPlayerCheckpoints.flatMap { cp ->
+            computeVisibleKeys(cp, 1, lr.boardSize)
+        }.toSet()
+        val newExplored = lr.explored +
+            computeVisibleKeys(lr.playerPos, expandedVision, lr.boardSize) +
+            beaconPingKeys
 
-        // Compute optimal BFS pathfinder trail toward the finish gate
+        // Compute optimal BFS pathfinder trail toward the next strategic objective (nearest Beacon or unlocked Portal)
+        val objective = lr.nextPlayerObjective
         val bestPath = MazeGenerator.bfsPath(
             blocks = lr.blocks,
             sx = lr.playerPos.x,
             sy = lr.playerPos.y,
-            tx = lr.finishPos.x,
-            ty = lr.finishPos.y,
+            tx = objective.x,
+            ty = objective.y,
             allowMine = false,
             boardSize = lr.boardSize
         ) ?: MazeGenerator.bfsPath(
             blocks = lr.blocks,
             sx = lr.playerPos.x,
             sy = lr.playerPos.y,
-            tx = lr.finishPos.x,
-            ty = lr.finishPos.y,
+            tx = objective.x,
+            ty = objective.y,
             allowMine = true,
             boardSize = lr.boardSize
         ) ?: emptyList()
@@ -556,7 +1070,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     sonarActive = true,
                     currentVision = expandedVision,
                     explored = newExplored,
-                    hintPath = bestPath.take(16)
+                    hintPath = bestPath.take(18)
                 )
             )
         }
@@ -602,28 +1116,200 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        fx.updateSoundtrackContext(lr.biome, nextTimer, lr.combo, paused = false)
+        // Urgent final-10-second race countdown tick
+        if (nextTimer in 1..10) {
+            fx.playTimerTick(nextTimer)
+        }
 
+        // Fever 5x 10-second countdown & 3-second timed Combo decay (Practice/Campaign/Quick-Play)
+        var nextFeverSec = lr.feverRemainingSec
+        var nextFeverCharge = lr.feverCharge
+        var nextOverdrive = lr.overdriveActive
+        var nextCombo = lr.combo
+        var nextComboTimer = lr.comboTimerTicks
+        if (lr.isPractice) {
+            if (nextFeverSec > 0) {
+                nextFeverSec = (nextFeverSec - 1).coerceAtLeast(0)
+                if (nextFeverSec == 0) {
+                    nextFeverCharge = 0
+                    nextOverdrive = false
+                }
+            } else if (nextFeverCharge > 0 && nextComboTimer == 0) {
+                // Live-Ops tunable Fever charge decay when player stops chaining actions
+                val decayPoints = ceil(activeLiveBalance.feverDecayRatePerSec * 15f).toInt().coerceAtLeast(1)
+                nextFeverCharge = (nextFeverCharge - decayPoints).coerceAtLeast(0)
+            }
+            if (nextComboTimer > 0) {
+                nextComboTimer = (nextComboTimer - 1).coerceAtLeast(0)
+                if (nextComboTimer == 0 && nextFeverSec == 0) {
+                    nextCombo = 0
+                    nextOverdrive = false
+                }
+            }
+        }
+
+        val nextSurgeCooldown = (lr.surgeCooldownTicks - 1).coerceAtLeast(0)
+        val updated = lr.copy(
+            tickCount = nextTick,
+            timer = nextTimer,
+            stamina = nextStamina,
+            activePower = nextPower,
+            currentVision = nextVision,
+            combo = nextCombo,
+            comboTimerTicks = nextComboTimer,
+            surgeCooldownTicks = nextSurgeCooldown,
+            feverCharge = nextFeverCharge,
+            feverRemainingSec = nextFeverSec,
+            overdriveActive = nextOverdrive
+        )
+        syncSoundtrackContext(updated, pausedOverride = false)
+
+        _uiState.update { it.copy(liveRace = updated) }
+    }
+
+    /**
+     * Active Kinetic SURGE Capability (Expedition & Instant Play boards):
+     * - Facing open floor / sand drift: dashes up to 2 tiles forward (sweeps sand automatically!)
+     * - Facing a rock block: delivers a Heavy Power Strike (+2 bonus damage shatter blow!)
+     * Costs 18 Stamina with a 6-second tactical cooldown.
+     */
+    fun triggerMinerSurge() {
+        val lr = _uiState.value.liveRace ?: return
+        if (lr.status != RaceStatus.PLAYING || lr.paused) return
+        if (!lr.isPractice) {
+            showToast("Daily Ranked 21×21 is pure canonical skill (no active Surge).")
+            return
+        }
+        if (lr.surgeCooldownTicks > 0) {
+            fx.playHazard()
+            showToast("⚡ Surge recharging (${lr.surgeCooldownTicks}s)")
+            return
+        }
+        if (lr.stamina < 18.0) {
+            fx.playHazard()
+            showToast("⚡ Need 18 Stamina to trigger Kinetic Surge")
+            return
+        }
+
+        val dx = lr.facingDir.x.coerceIn(-1, 1)
+        val dy = lr.facingDir.y.coerceIn(-1, 1)
+        val dirX = if (dx == 0 && dy == 0) 1 else dx
+        val dirY = if (dx == 0 && dy == 0) 0 else dy
+        val frontX = lr.playerPos.x + dirX
+        val frontY = lr.playerPos.y + dirY
+        if (frontX !in 0 until lr.boardSize || frontY !in 0 until lr.boardSize) {
+            fx.playHazard()
+            return
+        }
+
+        val frontKey = "$frontX,$frontY"
+        val frontBlock = lr.blocks[frontKey]
+        if (frontBlock != null && frontBlock.special == BlockSpecial.LOCKED && !lr.hasKey) {
+            fx.playHazard()
+            showToast(currentStrings().toastLocked)
+            return
+        }
+
+        autoStepJob?.cancel()
+        fx.playDashSurge()
+        hitPulseSeq++
+        recordedTickInputs.add(
+            ReplayTickInput(
+                direction = MoveDir.fromDelta(dirX, dirY),
+                triggerSurge = true
+            )
+        )
+        if (lr.isGauntlet) {
+            gauntletController.onKineticSurgeTriggered()
+        }
+        val nextGauntletStep = if (lr.isGauntlet) gauntletController.currentStep.value else lr.gauntletStep
+
+        if (frontBlock != null) {
+            // Heavy Power Strike: shave 2 extra HP off the target block, then execute a mining swing!
+            val updatedBlocks = lr.blocks.toMutableMap()
+            val reducedHp = (frontBlock.hp - 2).coerceAtLeast(1)
+            updatedBlocks[frontKey] = frontBlock.copy(hp = reducedHp)
+            val pop = nextPopup(frontX, frontY, "⚡ POWER STRIKE!", isPositive = true)
+            _uiState.update {
+                it.copy(
+                    liveRace = lr.copy(
+                        blocks = updatedBlocks,
+                        hiddenRevealed = lr.hiddenRevealed + frontKey,
+                        stamina = (lr.stamina - 18.0).coerceAtLeast(0.0),
+                        surgeCooldownTicks = 6,
+                        surgePulseTick = hitPulseSeq,
+                        gauntletStep = nextGauntletStep,
+                        popups = (lr.popups + pop).takeLast(10)
+                    )
+                )
+            }
+            schedulePopupCleanup(listOf(pop.id))
+            mineAt(GridPos(frontX, frontY))
+            return
+        }
+
+        // Open Corridor / Sand Drift Dash: clear sand drift if present & dash up to 2 tiles forward!
+        val pop = nextPopup(lr.playerPos.x, lr.playerPos.y, "⚡ SURGE DASH!", isPositive = true)
+        val clearedSand = lr.sandDrifts - frontKey - "${frontX + dirX},${frontY + dirY}"
         _uiState.update {
             it.copy(
                 liveRace = lr.copy(
-                    tickCount = nextTick,
-                    timer = nextTimer,
-                    stamina = nextStamina,
-                    activePower = nextPower,
-                    currentVision = nextVision
+                    sandDrifts = clearedSand,
+                    stamina = (lr.stamina - 18.0).coerceAtLeast(0.0),
+                    surgeCooldownTicks = 6,
+                    surgePulseTick = hitPulseSeq,
+                    gauntletStep = nextGauntletStep,
+                    popups = (lr.popups + pop).takeLast(10)
                 )
             )
+        }
+        schedulePopupCleanup(listOf(pop.id))
+        tryMove(dirX, dirY)
+        val afterFirst = _uiState.value.liveRace ?: return
+        if (afterFirst.status == RaceStatus.PLAYING) {
+            val secondX = afterFirst.playerPos.x + dirX
+            val secondY = afterFirst.playerPos.y + dirY
+            if (secondX in 0 until afterFirst.boardSize &&
+                secondY in 0 until afterFirst.boardSize &&
+                !afterFirst.blocks.containsKey("$secondX,$secondY")
+            ) {
+                tryMove(dirX, dirY)
+            }
         }
     }
 
     private fun onRivalTick() {
         val lr = _uiState.value.liveRace ?: return
-        if (lr.status != RaceStatus.PLAYING || lr.paused) return
+        if (lr.status != RaceStatus.PLAYING || lr.paused || lr.pvpRoomId != null || lr.isGauntlet) return
 
         val personality = lr.rivalPersonality
-        var target = lr.finishPos
-        if (personality.seeksGems && lr.gems.isNotEmpty()) {
+        val rivalRemainingBeacons = lr.remainingRivalCheckpoints
+        val playerRemDist = MazeGenerator.computeCircuitDistance(
+            from = lr.playerPos,
+            uncapturedBeacons = lr.remainingPlayerCheckpoints,
+            finishPos = lr.finishPos
+        )
+        val rivalRemDist = MazeGenerator.computeCircuitDistance(
+            from = lr.rivalPos,
+            uncapturedBeacons = rivalRemainingBeacons,
+            finishPos = lr.finishPos
+        )
+        val rivalTrailing = lr.isPractice && rivalRemDist > playerRemDist + 5
+        val rivalWayAhead = lr.isPractice && playerRemDist > rivalRemDist + 11
+
+        // Subtle competitive pacing: when far ahead, Rival takes an occasional tactical scan beat
+        // so skilled wall-breaching shortcuts by the player can produce dramatic comebacks.
+        if (rivalWayAhead && rivalRng() < 0.22) {
+            return
+        }
+
+        // Strategic multi-leg objective: hunt nearest uncaptured Beacon first, then sprint to Finish Portal
+        var target = rivalRemainingBeacons.minByOrNull {
+            abs(it.x - lr.rivalPos.x) + abs(it.y - lr.rivalPos.y)
+        } ?: lr.finishPos
+
+        // Only detour for gems if not trailing in a competitive showdown
+        if (personality.seeksGems && !rivalTrailing && lr.gems.isNotEmpty()) {
             var bestGem: GridPos? = null
             var bestDist = Int.MAX_VALUE
             for (gKey in lr.gems) {
@@ -636,7 +1322,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     bestGem = GridPos(gx, gy)
                 }
             }
-            if (bestGem != null && bestDist < 8) target = bestGem
+            if (bestGem != null && bestDist < 7) target = bestGem
         }
 
         val path = MazeGenerator.bfsPath(
@@ -649,8 +1335,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             boardSize = lr.boardSize
         )
 
-        // Smart Tactical Shortcut Mining in Campaign/Practice: Rival can break adjacent weak rock if it cuts a long detour
-        if (lr.isPractice && (path == null || path.size > 14) && rivalRng() < personality.mineBias * 0.65) {
+        // Distinct 4-Rival Personality Behaviors + Strategic Wall-Breaching Shortcuts:
+        // - VEX: Aggressive breacher, smashes walls up to HP 3 directly toward beacons/exit
+        // - GOLDIE: Fast sprinter, dashes 2 tiles along open corridors
+        // - RUBBLE: Chaotic wildcard, mixes surprise feints with opportunistic wall breaches
+        // - MOSS: Disciplined maze tactician, cuts shortcuts when corridor detour is too long
+        val maxBreakHp = if (personality == RivalPersonality.VEX || rivalTrailing) 3 else 2
+        val effectiveBias = (personality.mineBias + if (rivalTrailing) 0.22 else 0.0).coerceAtMost(0.95)
+        val wantsMineShortcut = lr.isPractice && (
+            personality == RivalPersonality.VEX ||
+                path == null ||
+                path.size > 12
+            ) && rivalRng() < effectiveBias * (if (personality == RivalPersonality.VEX) 0.80 else 0.58)
+
+        if (wantsMineShortcut) {
             val preferredDx = (target.x - lr.rivalPos.x).coerceIn(-1, 1)
             val preferredDy = (target.y - lr.rivalPos.y).coerceIn(-1, 1)
             val candidateDirs = listOfNotNull(
@@ -664,7 +1362,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 if (nx !in 1 until lr.boardSize - 1 || ny !in 1 until lr.boardSize - 1) continue
                 val k = "$nx,$ny"
                 val b = lr.blocks[k]
-                if (b != null && b.special != BlockSpecial.LOCKED && b.hp <= 2) {
+                if (b != null && b.special != BlockSpecial.LOCKED && b.hp <= maxBreakHp) {
                     val updatedBlocks = lr.blocks.toMutableMap()
                     if (b.hp <= 1) updatedBlocks.remove(k)
                     else updatedBlocks[k] = b.copy(hp = b.hp - 1)
@@ -676,14 +1374,72 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         if (path.isNullOrEmpty()) return
 
-        val nextStep = path.first()
+        // Rubble chaotic feint (suppressed when trailing hard so races stay tense)
+        if (lr.isPractice && personality == RivalPersonality.RUBBLE && !rivalTrailing && rivalRng() < 0.12) {
+            val openNeighbors = listOf(1 to 0, -1 to 0, 0 to 1, 0 to -1).mapNotNull { (dx, dy) ->
+                val nx = lr.rivalPos.x + dx
+                val ny = lr.rivalPos.y + dy
+                if (nx in 1 until lr.boardSize - 1 && ny in 1 until lr.boardSize - 1 && !lr.blocks.containsKey("$nx,$ny")) {
+                    GridPos(nx, ny)
+                } else null
+            }
+            if (openNeighbors.isNotEmpty()) {
+                val feint = openNeighbors[(rivalRng() * openNeighbors.size).toInt().coerceIn(0, openNeighbors.lastIndex)]
+                _uiState.update { it.copy(liveRace = lr.copy(rivalPos = feint)) }
+                return
+            }
+        }
+
+        // Goldie fast sprinter (45% burst) OR trailing Rival pursuit surge (28% burst) along open corridors
+        val burstChance = when {
+            personality == RivalPersonality.GOLDIE -> 0.45
+            rivalTrailing -> 0.28
+            else -> 0.0
+        }
+        val canBurst = lr.isPractice &&
+            burstChance > 0.0 &&
+            path.size >= 2 &&
+            !lr.blocks.containsKey(path[1].key) &&
+            path[0] != lr.finishPos &&
+            path[0].key !in rivalRemainingBeacons.map { it.key }.toSet() &&
+            rivalRng() < burstChance
+
+        val nextStep = if (canBurst) path[1] else path.first()
         if (lr.blocks.containsKey(nextStep.key)) return
 
-        if (nextStep == lr.finishPos) {
-            _uiState.update { it.copy(liveRace = lr.copy(rivalPos = nextStep)) }
+        // Check if Rival captured an uncaptured Strategic Relay Beacon
+        var nextRivalBeacons = lr.rivalCheckpointsCleared
+        val capturedBeacon = rivalRemainingBeacons.any { it == nextStep }
+        if (capturedBeacon) {
+            nextRivalBeacons = nextRivalBeacons + nextStep.key
+            val rCount = nextRivalBeacons.size
+            val total = lr.checkpoints.size
+            val rivalAlert = if (rCount >= total) {
+                "🚨 ${personality.wireName} unlocked the Finish Portal!"
+            } else {
+                "🤖 ${personality.wireName} synced Beacon $rCount/$total!"
+            }
+            showToast(rivalAlert)
+        }
+
+        val rivalPortalUnlocked = lr.checkpoints.isEmpty() || nextRivalBeacons.size >= lr.checkpoints.size
+        if (nextStep == lr.finishPos && rivalPortalUnlocked) {
+            _uiState.update {
+                it.copy(
+                    liveRace = lr.copy(
+                        rivalPos = nextStep,
+                        rivalCheckpointsCleared = nextRivalBeacons
+                    )
+                )
+            }
             finishAsLoss(currentStrings().rivalWonReason, lr.tickCount, lr.stamina)
         } else {
-            _uiState.update { it.copy(liveRace = lr.copy(rivalPos = nextStep)) }
+            val updated = lr.copy(
+                rivalPos = nextStep,
+                rivalCheckpointsCleared = nextRivalBeacons
+            )
+            syncSoundtrackContext(updated, pausedOverride = false)
+            _uiState.update { it.copy(liveRace = updated) }
         }
     }
 
@@ -726,9 +1482,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         } else if (dist == 0) {
             mineTarget()
         } else {
-            // Intelligent multi-tile corridor pathfinder (up to 4 smooth canonical steps along explored open path)
+            // Intelligent multi-tile corridor pathfinder (up to 12 smooth steps along explored open path)
             val tapKey = "$x,$y"
-            if (tapKey in lr.explored && !lr.blocks.containsKey(tapKey) && dist <= 5) {
+            val maxAutoSteps = if (lr.isPractice) 12 else 5
+            if (tapKey in lr.explored && !lr.blocks.containsKey(tapKey) && dist <= maxAutoSteps) {
                 val miniPath = MazeGenerator.bfsPath(
                     blocks = lr.blocks,
                     sx = lr.playerPos.x,
@@ -738,7 +1495,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     allowMine = false,
                     boardSize = lr.boardSize
                 )
-                if (!miniPath.isNullOrEmpty() && miniPath.size <= 5) {
+                if (!miniPath.isNullOrEmpty() && miniPath.size <= maxAutoSteps) {
                     autoStepJob = viewModelScope.launch {
                         for (step in miniPath) {
                             val current = _uiState.value.liveRace ?: break
@@ -747,7 +1504,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             val sdy = step.y - current.playerPos.y
                             if (abs(sdx) + abs(sdy) != 1) break
                             tryMove(sdx, sdy)
-                            delay(95L)
+                            delay(82L)
                         }
                     }
                     return
@@ -793,6 +1550,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
+        // Desert Sand Drift clearing (Practice/Campaign): 1 tap sweeps sand drift clear before stepping in!
+        if (lr.isPractice && nextKey in lr.sandDrifts) {
+            val clearedDrifts = lr.sandDrifts - nextKey
+            val clearPts = if (lr.feverRemainingSec > 0) 25 else 5
+            fx.playBlockBreak(BlockKind.DIRT, lr.combo)
+            hitPulseSeq++
+            val pop = nextPopup(nx, ny, "🏜️ +$clearPts", isPositive = true)
+            _uiState.update {
+                it.copy(
+                    liveRace = lr.copy(
+                        sandDrifts = clearedDrifts,
+                        facingDir = GridPos(dx, dy),
+                        hitPulseTick = hitPulseSeq,
+                        lastHitPos = GridPos(nx, ny),
+                        lastHitKind = BlockKind.DIRT,
+                        lastHitBroke = true,
+                        lastHitExploded = false,
+                        score = lr.score + clearPts,
+                        popups = (lr.popups + pop).takeLast(10)
+                    )
+                )
+            }
+            schedulePopupCleanup(listOf(pop.id))
+            return
+        }
+
         val actionTick = lr.tickCount
         recordedActions.add(ReplayAction.Move(dx = dx, dy = dy, tick = actionTick))
 
@@ -814,6 +1597,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var nextPowersMap = lr.powers
         var nextGemsCollected = lr.gemsCollected
         var nextQuestGem = lr.questGemDone
+        var nextComboTimer = lr.comboTimerTicks
         val newPopups = ArrayList<FloatingPopup>()
         var movedSoundPlayed = false
 
@@ -834,6 +1618,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val curPos = GridPos(px, py)
         val curKey = curPos.key
 
+        // Volcano Lava Puddle hazard (-2s timer unless Shield Lv 2+ or active Shield powerup)
+        if (lr.isPractice && curKey in lr.lavaPuddles) {
+            val shieldProtects = lr.activePower == PowerupType.SHIELD || profile.value.shieldLevel >= 2
+            if (!shieldProtects) {
+                nextTimer = max(1, nextTimer - 2)
+                fx.playHazard()
+                movedSoundPlayed = true
+                newPopups.add(nextPopup(px, py, "🌋 -2s", isPositive = false))
+                showToast("🌋 Lava Puddle! -2s (Forge Shield Lv.2+ resists)")
+            } else {
+                newPopups.add(nextPopup(px, py, "🛡️ RESISTED", isPositive = true))
+            }
+        }
+
         // Ruins trap check
         if (curKey in lr.traps) {
             var dmg = lr.biome.rule.trapDamage.toDouble()
@@ -843,20 +1641,51 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             nextStamina = max(0.0, nextStamina - dmg)
             fx.playHazard()
             movedSoundPlayed = true
-            newPopups.add(nextPopup(px, py, "-${dmg.toInt()} ⚡", isPositive = false))
+            newPopups.add(nextPopup(px, py, "🪤 -${dmg.toInt()} ⚡", isPositive = false))
             showToast(currentStrings().toastRuinsTrap)
         }
 
-        // Gem collection
+        var nextFeverCharge = lr.feverCharge
+        var nextFeverSec = lr.feverRemainingSec
+        var nextOverdrive = lr.overdriveActive
+        val feverMult = if (lr.isPractice && nextFeverSec > 0) 5 else 1
+
+        // Gem collection + Crystal Magnet ability (pulls adjacent gems within 1 tile on Expedition/Custom boards)
         if (curKey in nextGemsSet) {
             nextGemsSet = nextGemsSet - curKey
-            val gain = ReplaySimulator.gemGain(lr.biome, lr.modifier)
+            val gain = ReplaySimulator.gemGain(lr.biome, lr.modifier) * feverMult
             nextScore += gain
             nextGemsCollected++
             nextQuestGem++
+            if (lr.isPractice) {
+                nextComboTimer = 3
+                if (nextFeverSec == 0) {
+                    nextFeverCharge = (nextFeverCharge + 10 + min(lr.combo, 5)).coerceAtMost(100)
+                }
+            }
             fx.playGem(lr.combo)
             movedSoundPlayed = true
-            newPopups.add(nextPopup(px, py, "💎 +$gain", isPositive = true))
+            newPopups.add(nextPopup(px, py, if (feverMult > 1) "🔥 +$gain" else "💎 +$gain", isPositive = true))
+        }
+        if (lr.isPractice && MinerAbility.CRYSTAL_MAGNET in lr.unlockedAbilities) {
+            val magDirs = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
+            for ((mdx, mdy) in magDirs) {
+                val mKey = "${px + mdx},${py + mdy}"
+                if (mKey in nextGemsSet) {
+                    nextGemsSet = nextGemsSet - mKey
+                    val gain = ReplaySimulator.gemGain(lr.biome, lr.modifier) * feverMult
+                    nextScore += gain
+                    nextGemsCollected++
+                    nextQuestGem++
+                    nextComboTimer = 3
+                    if (nextFeverSec == 0) {
+                        nextFeverCharge = (nextFeverCharge + 10).coerceAtMost(100)
+                    }
+                    fx.playGem(lr.combo + 1)
+                    movedSoundPlayed = true
+                    newPopups.add(nextPopup(px + mdx, py + mdy, "🧲 +$gain", isPositive = true))
+                }
+            }
         }
 
         // Powerup pickup
@@ -866,7 +1695,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             nextPower = picked
             nextPowerUntil = actionTick + 15
             when (picked) {
-                PowerupType.PICK -> nextScore += 5
+                PowerupType.PICK -> {
+                    nextScore += 5
+                    if (lr.isPractice && nextFeverSec == 0) {
+                        nextFeverCharge = (nextFeverCharge + 20).coerceAtMost(100)
+                    }
+                }
                 PowerupType.CLOCK -> nextTimer += 20
                 PowerupType.SONAR -> nextSonar++
                 PowerupType.LANTERN -> nextVision = 5
@@ -877,7 +1711,63 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             newPopups.add(nextPopup(px, py, "⚡ ${picked.wireName.uppercase()}", isPositive = true))
         }
 
+        // Strategic Relay Beacon Capture (multi-leg labyrinth circuit)
+        var nextPlayerBeacons = lr.playerCheckpointsCleared
+        val hitUncapturedBeacon = lr.checkpoints.any { it.key == curKey } && curKey !in nextPlayerBeacons
+        if (hitUncapturedBeacon) {
+            nextPlayerBeacons = nextPlayerBeacons + curKey
+            val firstToSector = curKey !in lr.rivalCheckpointsCleared
+            val baseGain = (100 + if (firstToSector) 40 else 0) * feverMult
+            nextScore += baseGain
+            nextTimer += 12
+            nextStamina = min(100.0, nextStamina + 25.0)
+            if (lr.isPractice && nextFeverSec == 0) {
+                nextFeverCharge = (nextFeverCharge + 28).coerceAtMost(100)
+            }
+            val count = nextPlayerBeacons.size
+            val total = lr.checkpoints.size
+            fx.playBeaconSync(portalUnlocked = count >= total)
+            movedSoundPlayed = true
+            if (count >= total) {
+                newPopups.add(nextPopup(px, py, "🔓 PORTAL OPEN! +12s", isPositive = true))
+                showToast("🔓 All $total Relay Beacons synced! Race to the Finish Portal!")
+            } else {
+                val tag = if (firstToSector) "FIRST! +12s" else "+12s"
+                newPopups.add(nextPopup(px, py, "⚡ BEACON $count/$total • $tag", isPositive = true))
+                showToast("⚡ Relay Beacon $count/$total synced! +12s & +25 Stamina")
+            }
+            if (lr.isGauntlet) {
+                gauntletController.onBeaconActivated()
+                if (gauntletController.forceGrantSurgeCharge) {
+                    nextStamina = 100.0
+                    showToast("⚡ FREE SURGE CHARGED! Tap SURGE to blast down the runway!")
+                }
+            }
+        }
+
+        // Ignite Fever 5x if gems/powerup/beacon topped off charge to 100%
+        if (lr.isPractice && nextFeverCharge >= 100 && nextFeverSec == 0) {
+            nextFeverSec = 10
+            nextOverdrive = true
+            fx.playFeverIgnite()
+            newPopups.add(nextPopup(px, py, "🔥 FEVER 5×!", isPositive = true))
+            showToast("🔥 FEVER 5× ACTIVE! 10s of 5× Score & 2× Mining Power!")
+        }
+
+        val portalReady = lr.checkpoints.isEmpty() || nextPlayerBeacons.size >= lr.checkpoints.size
+        if (curPos == lr.finishPos && !portalReady) {
+            val remainingCount = lr.checkpoints.size - nextPlayerBeacons.size
+            fx.playHazard()
+            movedSoundPlayed = true
+            newPopups.add(nextPopup(px, py, "🔒 $remainingCount BEACON(S) LEFT", isPositive = false))
+            showToast("🔒 Finish Portal sealed! Capture $remainingCount remaining Relay Beacon(s).")
+        }
+
         if (!movedSoundPlayed) fx.playStep()
+
+        recordedTickInputs.add(ReplayTickInput(direction = MoveDir.fromDelta(dx, dy)))
+        val nextSurgeCd = if (lr.isGauntlet && gauntletController.forceGrantSurgeCharge) 0 else lr.surgeCooldownTicks
+        val nextGauntletStep = if (lr.isGauntlet) gauntletController.currentStep.value else lr.gauntletStep
 
         val nextExplored = lr.explored + computeVisibleKeys(curPos, nextVision, lr.boardSize)
         val updatedRace = lr.copy(
@@ -886,6 +1776,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             myTrail = trail,
             ghostIndex = lr.ghostIndex + 1,
             explored = nextExplored,
+            playerCheckpointsCleared = nextPlayerBeacons,
             targetBlock = null,
             score = nextScore,
             timer = nextTimer,
@@ -898,14 +1789,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             powerUntilTick = nextPowerUntil,
             sonarCharges = nextSonar,
             currentVision = nextVision,
-            popups = (lr.popups + newPopups).takeLast(6)
+            comboTimerTicks = nextComboTimer,
+            surgeCooldownTicks = nextSurgeCd,
+            feverCharge = nextFeverCharge,
+            feverRemainingSec = nextFeverSec,
+            overdriveActive = nextOverdrive,
+            gauntletStep = nextGauntletStep,
+            popups = (lr.popups + newPopups).takeLast(10)
         )
 
+        syncSoundtrackContext(updatedRace, pausedOverride = false)
         _uiState.update { it.copy(liveRace = updatedRace) }
         if (newPopups.isNotEmpty()) schedulePopupCleanup(newPopups.map { it.id })
 
-        if (curPos == lr.finishPos) {
-            finishAsWin(updatedRace)
+        if (curPos == lr.finishPos && portalReady) {
+            if (lr.isGauntlet) {
+                gauntletController.onExitPortalEntered {
+                    viewModelScope.launch {
+                        repository.updateProfile { it.copy(gauntletCompleted = true) }
+                    }
+                }
+            }
+            finishAsWin(updatedRace.copy(gauntletStep = if (lr.isGauntlet) gauntletController.currentStep.value else updatedRace.gauntletStep))
         }
     }
 
@@ -966,9 +1871,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         var nextStamina = max(0.0, lr.stamina - cost)
-        val isOverdrive = lr.isPractice && lr.combo >= 4
+        val hasFeverAbility = lr.isPractice && MinerAbility.FEVER_OVERDRIVE in lr.unlockedAbilities
+        val feverModeActive = lr.isPractice && lr.feverRemainingSec > 0
+        val isOverdrive = feverModeActive || (hasFeverAbility && lr.combo >= 3)
+        val feverScoreMult = if (feverModeActive) 5 else 1
         var dmg = if (lr.activePower == PowerupType.PICK) 2 else 1
         if (lr.isPractice && profile.value.pickLevel >= 2) {
+            dmg += 1
+        }
+        if (lr.isPractice && MinerAbility.MASTER_DRILL in lr.unlockedAbilities) {
             dmg += 1
         }
         if (isOverdrive) {
@@ -984,33 +1895,112 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var nextHasKey = lr.hasKey
         var nextBroken = lr.brokenCount
         var nextQuestBreak = lr.questBreakDone
+        var nextFeverCharge = lr.feverCharge
+        var nextFeverSec = lr.feverRemainingSec
+        if (lr.isPractice && nextFeverSec == 0) {
+            // Active combo streak accelerates Fever charge!
+            val baseStep = if (hasFeverAbility) 12 else 8
+            val comboBoost = min(nextCombo, 6)
+            nextFeverCharge = (nextFeverCharge + baseStep + comboBoost).coerceAtMost(100)
+        }
         val nextBlocks = lr.blocks.toMutableMap()
         val newPopups = ArrayList<FloatingPopup>()
+        val blastOrigins = ArrayList<GridPos>()
         var didExplode = false
+        var maxChainDepth = 0
 
         if (remainingHp <= 0) {
             nextBlocks.remove(key)
             nextBroken++
             nextQuestBreak++
-            nextScore += 20
+            val breakPts = 20 * feverScoreMult
+            nextScore += breakPts
             nextStamina = min(100.0, nextStamina + 4.0)
-            newPopups.add(nextPopup(target.x, target.y, if (isOverdrive) "🔥 +20" else "+20", isPositive = true))
+            newPopups.add(
+                nextPopup(
+                    target.x,
+                    target.y,
+                    if (feverScoreMult > 1) "🔥 +$breakPts" else "+$breakPts",
+                    isPositive = true
+                )
+            )
 
             var specialFxPlayed = false
+            // Seismic Shockwave Ability: every 5th broken block blasts all 4 adjacent walls!
+            if (lr.isPractice && MinerAbility.SEISMIC_BLAST in lr.unlockedAbilities && nextBroken % 5 == 0 && block.special != BlockSpecial.EXPLOSIVE) {
+                didExplode = true
+                maxChainDepth = max(maxChainDepth, 1)
+                blastOrigins.add(target)
+                fx.playExplosion()
+                specialFxPlayed = true
+                newPopups.add(nextPopup(target.x, target.y, "⚡ SEISMIC!", isPositive = true))
+                val blastDirs = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
+                for ((dx, dy) in blastDirs) {
+                    val kk = "${target.x + dx},${target.y + dy}"
+                    val nb = nextBlocks[kk]
+                    if (nb != null && nb.special != BlockSpecial.LOCKED) {
+                        if (nb.hp <= 1) nextBlocks.remove(kk)
+                        else nextBlocks[kk] = nb.copy(hp = nb.hp - 1)
+                    }
+                }
+            }
             when (block.special) {
                 BlockSpecial.EXPLOSIVE -> {
                     didExplode = true
-                    fx.playExplosion()
                     specialFxPlayed = true
-                    showToast(s.toastExplosive)
-                    newPopups.add(nextPopup(target.x, target.y, "💥 BOOM!", isPositive = true))
+                    blastOrigins.add(target)
                     val blastDirs = arrayOf(1 to 0, -1 to 0, 0 to 1, 0 to -1)
-                    for ((dx, dy) in blastDirs) {
-                        val kk = "${target.x + dx},${target.y + dy}"
-                        val nb = nextBlocks[kk]
-                        if (nb != null) {
-                            if (nb.hp <= 1) nextBlocks.remove(kk)
-                            else nextBlocks[kk] = nb.copy(hp = nb.hp - 1)
+                    if (lr.isPractice) {
+                        // Recursive TNT Chain Blasts (up to depth 3) on Expedition & Quick-Play boards!
+                        val queue = ArrayDeque<Pair<GridPos, Int>>()
+                        val detonated = HashSet<String>()
+                        queue.add(target to 1)
+                        detonated.add(target.key)
+                        while (queue.isNotEmpty()) {
+                            val (origin, depth) = queue.removeFirst()
+                            if (depth > 3) continue
+                            maxChainDepth = max(maxChainDepth, depth)
+                            for ((dx, dy) in blastDirs) {
+                                val nx = origin.x + dx
+                                val ny = origin.y + dy
+                                val kk = "$nx,$ny"
+                                val nb = nextBlocks[kk] ?: continue
+                                if (nb.special == BlockSpecial.LOCKED) continue
+                                val wasExplosive = nb.special == BlockSpecial.EXPLOSIVE
+                                nextBlocks.remove(kk)
+                                nextBroken++
+                                nextQuestBreak++
+                                val chainPts = 20 * (depth + 1) * feverScoreMult
+                                nextScore += chainPts
+                                newPopups.add(nextPopup(nx, ny, "💥 +$chainPts", isPositive = true))
+                                if (wasExplosive && depth < 3 && detonated.add(kk)) {
+                                    val chainPos = GridPos(nx, ny)
+                                    blastOrigins.add(chainPos)
+                                    queue.add(chainPos to (depth + 1))
+                                }
+                            }
+                        }
+                        if (maxChainDepth > 1) {
+                            fx.playChainExplosion(maxChainDepth)
+                            newPopups.add(nextPopup(target.x, target.y, "💥 CHAIN x$maxChainDepth!", isPositive = true))
+                            showToast("💥 CHAIN BLAST x$maxChainDepth! Massive subterranean detonation!")
+                        } else {
+                            fx.playExplosion()
+                            showToast(s.toastExplosive)
+                            newPopups.add(nextPopup(target.x, target.y, "💥 BOOM!", isPositive = true))
+                        }
+                    } else {
+                        // Strictly canonical Daily Ranked 21x21 explosive behavior (matches ReplaySimulator bit-for-bit)
+                        fx.playExplosion()
+                        showToast(s.toastExplosive)
+                        newPopups.add(nextPopup(target.x, target.y, "💥 BOOM!", isPositive = true))
+                        for ((dx, dy) in blastDirs) {
+                            val kk = "${target.x + dx},${target.y + dy}"
+                            val nb = nextBlocks[kk]
+                            if (nb != null) {
+                                if (nb.hp <= 1) nextBlocks.remove(kk)
+                                else nextBlocks[kk] = nb.copy(hp = nb.hp - 1)
+                            }
                         }
                     }
                 }
@@ -1046,9 +2036,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 val r = gameplayRng()
                 when {
                     r < 0.4 -> {
-                        nextScore += 50
+                        val jackpot = 50 * feverScoreMult
+                        nextScore += jackpot
                         showToast(s.toastJackpot)
-                        newPopups.add(nextPopup(target.x, target.y, "🎰 +50!", isPositive = true))
+                        newPopups.add(nextPopup(target.x, target.y, "🎰 +$jackpot!", isPositive = true))
                     }
                     r < 0.7 -> {
                         nextTimer -= 10
@@ -1056,8 +2047,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         newPopups.add(nextPopup(target.x, target.y, "🎰 -10s", isPositive = false))
                     }
                     else -> {
-                        nextScore += 10
-                        newPopups.add(nextPopup(target.x, target.y, "🎰 +10", isPositive = true))
+                        val consolation = 10 * feverScoreMult
+                        nextScore += consolation
+                        newPopups.add(nextPopup(target.x, target.y, "🎰 +$consolation", isPositive = true))
                     }
                 }
             }
@@ -1065,11 +2057,37 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (!specialFxPlayed) fx.playBlockBreak(block.kind, nextCombo)
         } else {
             nextBlocks[key] = block.copy(hp = remainingHp)
-            fx.playMineHit(block.kind, nextCombo)
+            fx.playMineHit(block.kind, nextCombo, remainingHp, block.max)
         }
 
-        fx.updateSoundtrackContext(lr.biome, nextTimer, nextCombo, paused = false)
+        // Ignite full 10-second Fever 5x Mode at 100% charge!
+        var ignitedFeverNow = false
+        if (lr.isPractice && nextFeverCharge >= 100 && nextFeverSec == 0) {
+            nextFeverSec = 10
+            ignitedFeverNow = true
+            fx.playFeverIgnite()
+            newPopups.add(nextPopup(lr.playerPos.x, lr.playerPos.y, "🔥 FEVER 5×!", isPositive = true))
+            showToast("🔥 FEVER 5× ACTIVE! 10s of 5× Score & 2× Mining Power!")
+        }
+
+        val nowOverdrive = (lr.isPractice && nextFeverSec > 0) || (hasFeverAbility && nextCombo >= 3)
+        if (nowOverdrive && !lr.overdriveActive && !ignitedFeverNow) {
+            fx.playFeverIgnite()
+        }
         hitPulseSeq++
+        recordedTickInputs.add(
+            ReplayTickInput(
+                direction = MoveDir.fromDelta(target.x - lr.playerPos.x, target.y - lr.playerPos.y),
+                triggerTnt = didExplode
+            )
+        )
+        if (lr.isGauntlet && remainingHp <= 0) {
+            gauntletController.onTileDug(target.x, target.y)
+            if (didExplode) {
+                gauntletController.onTntDetonated()
+            }
+        }
+        val nextGauntletStep = if (lr.isGauntlet) gauntletController.currentStep.value else lr.gauntletStep
 
         val updatedRace = lr.copy(
             blocks = nextBlocks,
@@ -1080,7 +2098,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             lastHitKind = block.kind,
             lastHitBroke = remainingHp <= 0,
             lastHitExploded = didExplode,
-            overdriveActive = lr.isPractice && nextCombo >= 4,
+            lastBlastOrigins = blastOrigins,
+            lastChainDepth = maxChainDepth,
+            feverCharge = nextFeverCharge,
+            feverRemainingSec = nextFeverSec,
+            comboTimerTicks = if (lr.isPractice) 3 else lr.comboTimerTicks,
+            overdriveActive = nowOverdrive,
             score = nextScore,
             timer = nextTimer,
             stamina = nextStamina,
@@ -1089,8 +2112,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             brokenCount = nextBroken,
             questBreakDone = nextQuestBreak,
             hasKey = nextHasKey,
-            popups = (lr.popups + newPopups).takeLast(6)
+            gauntletStep = nextGauntletStep,
+            popups = (lr.popups + newPopups).takeLast(10)
         )
+        syncSoundtrackContext(updatedRace, pausedOverride = false)
         _uiState.update { it.copy(liveRace = updatedRace) }
         if (newPopups.isNotEmpty()) schedulePopupCleanup(newPopups.map { it.id })
     }
@@ -1101,16 +2126,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         fx.playWin()
 
         val finalTicks = race.tickCount.coerceIn(10, 1000)
+        val clearTimeMs = (System.currentTimeMillis() - raceStartElapsedMs).coerceAtLeast(8_000L)
         val bonus = ReplaySimulator.timeBonus(finalTicks)
         val totalScore = race.score + bonus
+        val nextAbyssalCumulative = if (race.abyssalFloor != null) race.abyssalCumulativeScore + totalScore else race.abyssalCumulativeScore
         val actionsCopy = recordedActions.toList()
+        val tickInputsCopy = if (recordedTickInputs.isNotEmpty()) recordedTickInputs.toList() else Replay16BitCodec.fromTrail(race.myTrail)
+        val base64Replay16Bit = Replay16BitCodec.encodeToBase64(tickInputsCopy)
+        val abyssalFp = if (race.abyssalFloor != null && race.abyssalRootSeed != null) {
+            Replay16BitCodec.computeSha256Fingerprint(
+                seed = race.abyssalRootSeed,
+                score = nextAbyssalCumulative,
+                clearTimeMs = clearTimeMs,
+                base64Replay = base64Replay16Bit
+            )
+        } else {
+            null
+        }
         val prof = profile.value
 
-        // Harvester upgrade + Founder Pack (+15%) multiply wallet gem payout
+        // Harvester upgrade + Founder Pack (+15%) + Abyssal Depth Floor Multiplier multiply wallet gem payout
         val baseWalletGems = 12 + (race.gemsCollected * 2) + (race.brokenCount / 2)
         val harvesterMult = 1.0 + (prof.harvesterLevel * 0.20)
         val founderMult = if (prof.founderPackOwned) 1.15 else 1.0
-        val walletGemsEarned = ceil(baseWalletGems * harvesterMult * founderMult).toInt()
+        val abyssalMult = if (race.abyssalFloor != null) race.abyssalGemMultiplier.toDouble() else 1.0
+        val gauntletBonus = if (race.isGauntlet && !prof.gauntletCompleted) 50 else 0
+        val walletGemsEarned = ceil(baseWalletGems * harvesterMult * founderMult * abyssalMult).toInt() + gauntletBonus
 
         val breakdown = ScoreBreakdown(
             totalScore = totalScore,
@@ -1129,6 +2170,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 liveRace = race.copy(
                     status = RaceStatus.WON,
                     score = totalScore,
+                    clearTimeMs = clearTimeMs,
+                    compressedReplay16Bit = base64Replay16Bit,
+                    abyssalCumulativeScore = nextAbyssalCumulative,
+                    abyssalFingerprint = abyssalFp,
                     lastBreakdown = breakdown
                 )
             )
@@ -1150,29 +2195,39 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 remoteSession = remoteSession
             )
 
-            // Record Expedition Campaign 1-3 stars & first-clear gem reward if applicable
+            // Record Expedition Campaign 1-3 stars, first-clear gem reward & ability unlock detection
             var earnedStars = 0
             var firstClearBonus = 0
+            var unlockedNow: MinerAbility? = null
             if (race.campaignLevelId != null) {
                 val lvl = CampaignCatalog.byId(race.campaignLevelId)
                 if (lvl != null) {
+                    val prevCleared = campaignProgress.value.filter { it.stars > 0 }.map { it.levelId }.toSet()
+                    val prevAbilities = CampaignCatalog.unlockedAbilities(prevCleared)
                     val (s, bonusGems) = repository.recordCampaignClear(lvl, totalScore, finalTicks)
                     earnedStars = s
                     firstClearBonus = bonusGems
+                    val afterAbilities = CampaignCatalog.unlockedAbilities(prevCleared + lvl.id)
+                    unlockedNow = (afterAbilities - prevAbilities).firstOrNull()
                 }
             }
 
+            var streakMilestoneBonus = 0
             repository.updateProfile { cur ->
+                val newStreak = cur.streak + 1
+                val milestoneGems = if (newStreak > 0 && newStreak % 7 == 0) 500 else 0
+                streakMilestoneBonus = milestoneGems
+                val nextHighestAbyssal = max(cur.highestAbyssalFloor, race.abyssalFloor ?: 0)
                 var next = cur.copy(
-                    gems = cur.gems + walletGemsEarned + firstClearBonus,
+                    gems = cur.gems + walletGemsEarned + firstClearBonus + milestoneGems,
                     totalWins = cur.totalWins + 1,
+                    streak = newStreak,
+                    bestStreak = max(cur.bestStreak, newStreak),
                     totalBlocksBroken = cur.totalBlocksBroken + race.brokenCount,
-                    totalGemsCollected = cur.totalGemsCollected + race.gemsCollected
+                    totalGemsCollected = cur.totalGemsCollected + race.gemsCollected,
+                    gauntletCompleted = cur.gauntletCompleted || race.isGauntlet,
+                    highestAbyssalFloor = nextHighestAbyssal
                 )
-                if (!race.isPractice) {
-                    val newStreak = cur.streak + 1
-                    next = next.copy(streak = newStreak, bestStreak = max(cur.bestStreak, newStreak))
-                }
                 if (!next.hasAchievement(AchievementId.FIRST_WIN)) {
                     next = next.withAchievement(AchievementId.FIRST_WIN)
                         .copy(gems = next.gems + AchievementId.FIRST_WIN.rewardGems)
@@ -1196,13 +2251,28 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 next
             }
 
+            if (gauntletBonus > 0) {
+                fx.playAbilityUnlock()
+                showToast("🎓 GAUNTLET MASTERED! +50 💎 Graduate Bonus!")
+            } else if (race.abyssalFloor != null) {
+                fx.playAbilityUnlock()
+                showToast("🕳️ ABYSSAL FLOOR ${race.abyssalFloor} CLEARED! Tap NEXT RACE to descend to Floor ${race.abyssalFloor + 1}!")
+            } else if (streakMilestoneBonus > 0) {
+                fx.playAbilityUnlock()
+                showToast("🔥 7-WIN STREAK MILESTONE! +$streakMilestoneBonus 💎 Bonus!")
+            } else if (unlockedNow != null) {
+                fx.playAbilityUnlock()
+                showToast("⚡ ABILITY UNLOCKED: ${unlockedNow.displayName}!")
+            }
+
             _uiState.update { cur ->
                 val lr = cur.liveRace ?: return@update cur
                 cur.copy(
                     liveRace = lr.copy(
                         lastVerifyResult = verifyResult,
                         starsEarned = earnedStars,
-                        firstClearGemsEarned = firstClearBonus
+                        firstClearGemsEarned = firstClearBonus,
+                        newlyUnlockedAbility = unlockedNow
                     ),
                     lastVerifiedReceipt = if (verifyResult.verified) verifyResult else cur.lastVerifiedReceipt
                 )
@@ -1255,14 +2325,34 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun buyUpgrade(upgrade: UpgradeType) {
         viewModelScope.launch {
-            val (ok, _) = repository.purchaseUpgrade(upgrade)
+            val totalStars = campaignProgress.value.sumOf { it.stars }
+            val (outcome, updatedProfile) = repository.purchaseUpgrade(upgrade, totalStars)
             val s = currentStrings()
-            if (ok) {
-                fx.playPowerup()
-                showToast(s.toastUpgraded)
-            } else {
-                fx.playHazard()
-                showToast(s.toastNeedGems)
+            when (outcome) {
+                GameRepository.UpgradePurchaseOutcome.SUCCESS -> {
+                    val newLvl = updatedProfile.levelFor(upgrade)
+                    val tierName = upgrade.currentTierLabel(newLvl)
+                    fx.playForgeUpgrade(newLvl)
+                    showToast("⚒️ Forged ${AppStrings.upgradeName(s, upgrade)} • $tierName Lv.$newLvl!")
+                }
+                GameRepository.UpgradePurchaseOutcome.MASTERY_LOCKED -> {
+                    val curLvl = updatedProfile.levelFor(upgrade)
+                    val req = upgrade.requirementForNextLevel(curLvl)
+                    val missing = req.missingSummary(
+                        updatedProfile.totalWins,
+                        updatedProfile.totalBlocksBroken,
+                        totalStars
+                    )
+                    fx.playHazard()
+                    showToast("🔒 Earn ${req.tierName} Tier first: $missing")
+                }
+                GameRepository.UpgradePurchaseOutcome.INSUFFICIENT_GEMS -> {
+                    fx.playHazard()
+                    showToast(s.toastNeedGems)
+                }
+                GameRepository.UpgradePurchaseOutcome.MAX_LEVEL -> {
+                    showToast(s.maxLevel)
+                }
             }
         }
     }

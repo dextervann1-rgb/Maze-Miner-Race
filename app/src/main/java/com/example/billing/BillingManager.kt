@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Real Google Play Billing v7.1.1 monetization pack manager (Creator Program compliant — zero ad SDKs).
@@ -51,6 +52,7 @@ class BillingManager(
     context: Context,
     private val verifyPurchaseWithServer: suspend (StorePackSpec, String, String?) -> Boolean = { _, _, _ -> true },
     private val onPurchaseVerified: (StorePackSpec) -> Unit,
+    private val onNonConsumableRestored: (StorePackSpec) -> Unit = {},
     private val onBillingNotice: (String) -> Unit
 ) : PurchasesUpdatedListener {
 
@@ -95,6 +97,7 @@ class BillingManager(
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val inFlightTokens = ConcurrentHashMap.newKeySet<String>()
 
     private val _state = MutableStateFlow(BillingUiState())
     val state: StateFlow<BillingUiState> = _state.asStateFlow()
@@ -212,42 +215,62 @@ class BillingManager(
     }
 
     private fun handlePurchase(purchase: Purchase) {
+        if (purchase.purchaseState == Purchase.PurchaseState.PENDING) {
+            onBillingNotice("Purchase pending — items will unlock automatically once payment completes.")
+            return
+        }
         if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) return
         val pack = PACKS.find { it.productId in purchase.products } ?: return
+        val token = purchase.purchaseToken
+
+        // Idempotently restore already-acknowledged non-consumable entitlements (e.g. reinstall/new device)
+        if (!pack.isConsumable && purchase.isAcknowledged) {
+            onNonConsumableRestored(pack)
+            return
+        }
+
+        // Guard against concurrent duplicate handling from onPurchasesUpdated + restoreOwnedPurchases
+        if (!inFlightTokens.add(token)) return
 
         scope.launch {
             val serverValid = runCatching {
-                verifyPurchaseWithServer(pack, purchase.purchaseToken, purchase.orderId)
+                verifyPurchaseWithServer(pack, token, purchase.orderId)
             }.getOrDefault(false)
 
             if (!serverValid) {
+                inFlightTokens.remove(token)
                 onBillingNotice("Purchase token could not be verified by server.")
                 return@launch
             }
 
             if (pack.isConsumable) {
                 val consumeParams = ConsumeParams.newBuilder()
-                    .setPurchaseToken(purchase.purchaseToken)
+                    .setPurchaseToken(token)
                     .build()
                 billingClient.consumeAsync(consumeParams) { consumeResult, _ ->
+                    inFlightTokens.remove(token)
                     if (consumeResult.responseCode == BillingClient.BillingResponseCode.OK) {
                         onPurchaseVerified(pack)
                     }
                 }
             } else if (!purchase.isAcknowledged) {
                 val ackParams = AcknowledgePurchaseParams.newBuilder()
-                    .setPurchaseToken(purchase.purchaseToken)
+                    .setPurchaseToken(token)
                     .build()
                 billingClient.acknowledgePurchase(ackParams) { ackResult ->
+                    inFlightTokens.remove(token)
                     if (ackResult.responseCode == BillingClient.BillingResponseCode.OK) {
                         onPurchaseVerified(pack)
                     }
                 }
+            } else {
+                inFlightTokens.remove(token)
             }
         }
     }
 
     fun destroy() {
+        inFlightTokens.clear()
         scope.cancel()
         runCatching { billingClient.endConnection() }
     }

@@ -47,6 +47,7 @@ import com.example.R
 import com.example.billing.BillingManager
 import com.example.billing.BillingUiState
 import com.example.billing.StorePackSpec
+import com.example.data.CampaignProgressEntity
 import com.example.data.PlayerProfileEntity
 import com.example.data.hasAchievement
 import com.example.data.levelFor
@@ -71,6 +72,7 @@ import com.example.viewmodel.todayUtcSeed
 fun ForgeHubTab(
     strings: LocalizedStrings,
     profile: PlayerProfileEntity,
+    campaignProgress: List<CampaignProgressEntity>,
     liveRace: LiveRaceState?,
     billingState: BillingUiState,
     onBuyUpgrade: (UpgradeType) -> Unit,
@@ -82,6 +84,7 @@ fun ForgeHubTab(
     val today = todayUtcSeed()
     val chestOpened = profile.chestOpenedDay == today
     val vaultClaimed = profile.vaultChallengeDay == today
+    val totalStars = campaignProgress.sumOf { it.stars }
     val q1Done = liveRace?.questBreakDone ?: 0
     val q2Done = liveRace?.questGemDone ?: 0
 
@@ -382,19 +385,26 @@ fun ForgeHubTab(
             }
         }
 
-        // 6 Permanent Upgrade Cards
+        // 6 Earned Mastery-Gated Permanent Upgrade Cards
         items(UpgradeType.entries) { upgrade ->
             val currentLvl = profile.levelFor(upgrade)
             val isMax = currentLvl >= upgrade.maxLevel
             val cost = upgrade.costForNextLevel(currentLvl)
+            val req = upgrade.requirementForNextLevel(currentLvl)
+            val masteryMet = isMax || req.isMet(profile.totalWins, profile.totalBlocksBroken, totalStars)
             val canAfford = profile.gems >= cost
+            val currentTier = upgrade.currentTierLabel(currentLvl)
 
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = ObsidianCard,
                 border = BorderStroke(
                     1.dp,
-                    if (isMax) EmeraldGem.copy(alpha = 0.5f) else ObsidianBorder
+                    when {
+                        isMax -> EmeraldGem.copy(alpha = 0.55f)
+                        masteryMet && canAfford -> ForgedGold.copy(alpha = 0.55f)
+                        else -> ObsidianBorder
+                    }
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -407,12 +417,28 @@ fun ForgeHubTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = AppStrings.upgradeName(strings, upgrade),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = TextPrimary
-                            )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = AppStrings.upgradeName(strings, upgrade),
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = TextPrimary
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = if (isMax) EmeraldGem.copy(alpha = 0.2f) else CrystalCyan.copy(alpha = 0.16f)
+                                ) {
+                                    Text(
+                                        text = currentTier.uppercase(),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                        color = if (isMax) EmeraldGem else CrystalCyan,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
                             Text(
                                 text = AppStrings.upgradeDesc(strings, upgrade),
                                 style = MaterialTheme.typography.bodySmall,
@@ -422,23 +448,64 @@ fun ForgeHubTab(
                         Spacer(modifier = Modifier.width(10.dp))
                         Button(
                             onClick = { onBuyUpgrade(upgrade) },
-                            enabled = !isMax && canAfford,
+                            enabled = !isMax && masteryMet && canAfford,
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(
                                 containerColor = if (isMax) EmeraldGem else ForgedGold,
-                                contentColor = ObsidianDeep
+                                contentColor = ObsidianDeep,
+                                disabledContainerColor = ObsidianDeep,
+                                disabledContentColor = TextMuted
                             ),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                             modifier = Modifier.testTag("upgrade_${upgrade.name.lowercase()}")
                         ) {
                             if (isMax) {
                                 Text(strings.maxLevel, style = MaterialTheme.typography.labelMedium)
+                            } else if (!masteryMet) {
+                                Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("$cost 💎", style = MaterialTheme.typography.labelMedium)
                             } else {
                                 Icon(Icons.Filled.Upgrade, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("$cost 💎", style = MaterialTheme.typography.labelMedium)
+                                Text("$cost 💎", style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold))
                             }
                         }
+                    }
+
+                    // Earned Mastery Gate Banner (explains exact gameplay milestone required to forge next tier)
+                    if (!isMax && !masteryMet) {
+                        val missing = req.missingSummary(profile.totalWins, profile.totalBlocksBroken, totalStars)
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = ObsidianDeep,
+                            border = BorderStroke(1.dp, ForgedGold.copy(alpha = 0.32f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Lock,
+                                    contentDescription = null,
+                                    tint = ForgedGold,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "Earn ${req.tierName} Tier: $missing",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ForgedGold
+                                )
+                            }
+                        }
+                    } else if (!isMax) {
+                        Text(
+                            text = "✓ ${req.tierName} Tier Earned — ready to forge for $cost 💎",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = EmeraldGem
+                        )
                     }
 
                     Row(
@@ -455,7 +522,7 @@ fun ForgeHubTab(
                                 .clip(RoundedCornerShape(999.dp))
                         )
                         Text(
-                            text = "$currentLvl/${upgrade.maxLevel}",
+                            text = "Lv.$currentLvl/${upgrade.maxLevel}",
                             style = MaterialTheme.typography.labelSmall,
                             color = TextMuted
                         )

@@ -1,6 +1,7 @@
 package com.example.data
 
 import android.database.sqlite.SQLiteConstraintException
+import com.example.cloud.CloudProfileSave
 import com.example.engine.AchievementId
 import com.example.engine.Biome
 import com.example.engine.CampaignLevel
@@ -46,6 +47,47 @@ class GameRepository(private val dao: GameDao) {
             val updated = transform(current)
             dao.upsertProfile(updated)
             updated
+        }
+
+    /**
+     * Merges a synced Firestore CloudProfileSave back into local Room storage without losing
+     * any higher local progression, Forge upgrades, or Expedition campaign stars.
+     */
+    suspend fun applyCloudMergedSave(cloud: CloudProfileSave): PlayerProfileEntity =
+        withContext(Dispatchers.IO) {
+            val current = dao.getProfileOnce() ?: PlayerProfileEntity()
+            val merged = current.copy(
+                gems = max(current.gems, cloud.gems.toInt()),
+                streak = max(current.streak, cloud.streak.toInt()),
+                bestStreak = max(current.bestStreak, cloud.bestStreak.toInt()),
+                totalWins = max(current.totalWins, cloud.totalWins.toInt()),
+                totalBlocksBroken = max(current.totalBlocksBroken, cloud.totalBlocksBroken.toInt()),
+                totalGemsCollected = max(current.totalGemsCollected, cloud.totalGemsCollected.toInt()),
+                pickLevel = max(current.pickLevel, cloud.pickLevel.toInt().coerceIn(0, 5)),
+                lanternLevel = max(current.lanternLevel, cloud.lanternLevel.toInt().coerceIn(0, 5)),
+                staminaLevel = max(current.staminaLevel, cloud.staminaLevel.toInt().coerceIn(0, 5)),
+                sonarLevel = max(current.sonarLevel, cloud.sonarLevel.toInt().coerceIn(0, 5)),
+                harvesterLevel = max(current.harvesterLevel, cloud.harvesterLevel.toInt().coerceIn(0, 5)),
+                shieldLevel = max(current.shieldLevel, cloud.shieldLevel.toInt().coerceIn(0, 3)),
+                founderPackOwned = current.founderPackOwned || cloud.founderPackOwned,
+                gauntletCompleted = current.gauntletCompleted || cloud.gauntletCompleted,
+                highestAbyssalFloor = max(current.highestAbyssalFloor, cloud.highestAbyssalFloor.toInt().coerceIn(0, 999))
+            )
+            dao.upsertProfile(merged)
+
+            val remoteCampaign = CloudProfileSave.decodeCampaignSummary(cloud.campaignSummary)
+            remoteCampaign.forEach { remote ->
+                val local = dao.getCampaignProgress(remote.levelId)
+                val mergedLevel = CampaignProgressEntity(
+                    levelId = remote.levelId,
+                    stars = max(local?.stars ?: 0, remote.stars),
+                    bestScore = max(local?.bestScore ?: 0, remote.bestScore),
+                    bestTimeSeconds = min(local?.bestTimeSeconds ?: 999, remote.bestTimeSeconds),
+                    firstClearClaimed = (local?.firstClearClaimed == true) || remote.firstClearClaimed
+                )
+                dao.upsertCampaignProgress(mergedLevel)
+            }
+            merged
         }
 
     /**
@@ -262,13 +304,29 @@ class GameRepository(private val dao: GameDao) {
         }
     }
 
-    suspend fun purchaseUpgrade(upgrade: UpgradeType): Pair<Boolean, PlayerProfileEntity> =
+    enum class UpgradePurchaseOutcome {
+        SUCCESS,
+        MAX_LEVEL,
+        MASTERY_LOCKED,
+        INSUFFICIENT_GEMS
+    }
+
+    suspend fun purchaseUpgrade(
+        upgrade: UpgradeType,
+        campaignStars: Int = 0
+    ): Pair<UpgradePurchaseOutcome, PlayerProfileEntity> =
         withContext(Dispatchers.IO) {
             val current = dao.getProfileOnce() ?: PlayerProfileEntity()
             val curLvl = current.levelFor(upgrade)
-            if (curLvl >= upgrade.maxLevel) return@withContext (false to current)
+            if (curLvl >= upgrade.maxLevel) return@withContext (UpgradePurchaseOutcome.MAX_LEVEL to current)
+
+            val req = upgrade.requirementForNextLevel(curLvl)
+            if (!req.isMet(current.totalWins, current.totalBlocksBroken, campaignStars)) {
+                return@withContext (UpgradePurchaseOutcome.MASTERY_LOCKED to current)
+            }
+
             val cost = upgrade.costForNextLevel(curLvl)
-            if (current.gems < cost) return@withContext (false to current)
+            if (current.gems < cost) return@withContext (UpgradePurchaseOutcome.INSUFFICIENT_GEMS to current)
 
             var updated = current.copy(gems = current.gems - cost).withUpgradeLevel(upgrade, curLvl + 1)
             val totalLevels = updated.totalUpgradeLevels()
@@ -278,7 +336,7 @@ class GameRepository(private val dao: GameDao) {
                     .copy(gems = updated.gems + AchievementId.UPGRADE_MASTER.rewardGems)
             }
             dao.upsertProfile(updated)
-            true to updated
+            UpgradePurchaseOutcome.SUCCESS to updated
         }
 
     companion object {

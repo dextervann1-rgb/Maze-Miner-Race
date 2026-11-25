@@ -1,0 +1,6 @@
+<en-US>
+• NEW Endless Abyssal Depth Mode: Descend infinitely scaling procedural floors with escalating hazards and prestige rewards!
+• NEW Holographic Ghost Racers: Race against top Daily Ranked runs rendered directly on the 2.5D labyrinth canvas.
+• NEW 45-Second First-Run Gauntlet: Jump straight into mining, TNT chains, and Kinetic SURGE with zero-text interactive onboarding.
+• COMBAT JUICE & TELEMETRY: Added tactical hitstop, dynamic SURGE camera zoom, and live balance tuning.
+</en-US>

@@ -1,0 +1,390 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Hardened Global Primitives ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Valid SHA-256 lowercase hex string (64 chars)
+    function isValidSha256(hash) {
+      return hash is string && hash.matches('^[a-f0-9]{64}$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidBiome(val) {
+      return val is string && val in ['DESERT', 'ICE', 'VOLCANO', 'CAVERN', 'RUINS'];
+    }
+
+    function isValidBoardSize(val) {
+      return val is int && val in [15, 19, 21, 25, 29];
+    }
+
+    function isValidDifficulty(val) {
+      return val is string && val in ['EASY', 'NORMAL', 'HARD'];
+    }
+
+    function isValidTimestamp(val) {
+      return val is timestamp && val <= request.time;
+    }
+
+    // --- 1. Cross-Device Cloud Profile Save Validation ---
+    function isValidCloudProfile(data) {
+      return data.userId is string && data.userId.size() >= 1 && data.userId.size() <= 128 &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 40 &&
+             data.gems is int && data.gems >= 0 && data.gems <= 9999999 &&
+             data.streak is int && data.streak >= 0 && data.streak <= 9999 &&
+             data.bestStreak is int && data.bestStreak >= 0 && data.bestStreak <= 9999 &&
+             data.totalWins is int && data.totalWins >= 0 && data.totalWins <= 999999 &&
+             data.totalBlocksBroken is int && data.totalBlocksBroken >= 0 && data.totalBlocksBroken <= 99999999 &&
+             data.totalGemsCollected is int && data.totalGemsCollected >= 0 && data.totalGemsCollected <= 99999999 &&
+             data.pickLevel is int && data.pickLevel >= 0 && data.pickLevel <= 5 &&
+             data.lanternLevel is int && data.lanternLevel >= 0 && data.lanternLevel <= 5 &&
+             data.staminaLevel is int && data.staminaLevel >= 0 && data.staminaLevel <= 5 &&
+             data.sonarLevel is int && data.sonarLevel >= 0 && data.sonarLevel <= 5 &&
+             data.harvesterLevel is int && data.harvesterLevel >= 0 && data.harvesterLevel <= 5 &&
+             data.shieldLevel is int && data.shieldLevel >= 0 && data.shieldLevel <= 3 &&
+             data.founderPackOwned is bool &&
+             data.pvpWins is int && data.pvpWins >= 0 && data.pvpWins <= 999999 &&
+             data.pvpMatches is int && data.pvpMatches >= 0 && data.pvpMatches <= 999999 &&
+             data.campaignSummary is string && data.campaignSummary.size() <= 1200 &&
+             (!('gauntletCompleted' in data) || data.gauntletCompleted is bool) &&
+             (!('highestAbyssalFloor' in data) || (data.highestAbyssalFloor is int && data.highestAbyssalFloor >= 0 && data.highestAbyssalFloor <= 999)) &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    match /users/{userId} {
+      allow get, delete: if isOwner(userId) && isValidId(userId);
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      allow create: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       incoming().userId == request.auth.uid &&
+                       incoming().keys().hasAll([
+                         'userId', 'displayName', 'gems', 'streak', 'bestStreak', 'totalWins',
+                         'totalBlocksBroken', 'totalGemsCollected', 'pickLevel', 'lanternLevel',
+                         'staminaLevel', 'sonarLevel', 'harvesterLevel', 'shieldLevel',
+                         'founderPackOwned', 'pvpWins', 'pvpMatches', 'campaignSummary',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'userId', 'displayName', 'gems', 'streak', 'bestStreak', 'totalWins',
+                         'totalBlocksBroken', 'totalGemsCollected', 'pickLevel', 'lanternLevel',
+                         'staminaLevel', 'sonarLevel', 'harvesterLevel', 'shieldLevel',
+                         'founderPackOwned', 'pvpWins', 'pvpMatches', 'campaignSummary',
+                         'gauntletCompleted', 'highestAbyssalFloor',
+                         'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCloudProfile(incoming());
+
+      allow update: if isOwner(userId) &&
+                       isValidId(userId) &&
+                       isValidCloudProfile(incoming()) &&
+                       incoming().userId == existing().userId &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().diff(existing()).affectedKeys().hasOnly([
+                         'displayName', 'gems', 'streak', 'bestStreak', 'totalWins',
+                         'totalBlocksBroken', 'totalGemsCollected', 'pickLevel', 'lanternLevel',
+                         'staminaLevel', 'sonarLevel', 'harvesterLevel', 'shieldLevel',
+                         'founderPackOwned', 'pvpWins', 'pvpMatches', 'campaignSummary',
+                         'gauntletCompleted', 'highestAbyssalFloor',
+                         'updatedAt'
+                       ]);
+    }
+
+    // --- 2. Live PvP Cloud Matchmaking & Real-Time Telemetry Validation ---
+    function isValidPvpRoom(data) {
+      return data.roomCode is string && data.roomCode.size() >= 4 && data.roomCode.size() <= 12 &&
+             data.seed is string && data.seed.size() >= 3 && data.seed.size() <= 64 &&
+             isValidBiome(data.biome) &&
+             isValidBoardSize(data.boardSize) &&
+             isValidDifficulty(data.difficulty) &&
+             data.status is string && data.status in ['WAITING', 'ACTIVE', 'FINISHED'] &&
+             data.hostUid is string && data.hostUid.size() >= 1 && data.hostUid.size() <= 128 &&
+             data.hostName is string && data.hostName.size() >= 1 && data.hostName.size() <= 40 &&
+             data.hostX is int && data.hostX >= 0 && data.hostX <= 30 &&
+             data.hostY is int && data.hostY >= 0 && data.hostY <= 30 &&
+             data.hostScore is int && data.hostScore >= 0 && data.hostScore <= 999999 &&
+             data.hostBeacons is int && data.hostBeacons >= 0 && data.hostBeacons <= 10 &&
+             data.hostFinished is bool &&
+             data.guestUid is string && data.guestUid.size() <= 128 &&
+             data.guestName is string && data.guestName.size() <= 40 &&
+             data.guestX is int && data.guestX >= 0 && data.guestX <= 30 &&
+             data.guestY is int && data.guestY >= 0 && data.guestY <= 30 &&
+             data.guestScore is int && data.guestScore >= 0 && data.guestScore <= 999999 &&
+             data.guestBeacons is int && data.guestBeacons >= 0 && data.guestBeacons <= 10 &&
+             data.guestFinished is bool &&
+             data.winnerUid is string && data.winnerUid.size() <= 128 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    match /pvp_rooms/{roomId} {
+      allow get: if isSignedIn() &&
+                    isValidId(roomId) &&
+                    (existing().status == 'WAITING' ||
+                     existing().hostUid == request.auth.uid ||
+                     existing().guestUid == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+                     (resource.data.status == 'WAITING' ||
+                      resource.data.hostUid == request.auth.uid ||
+                      resource.data.guestUid == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(roomId) &&
+                       incoming().keys().hasAll([
+                         'roomCode', 'seed', 'biome', 'boardSize', 'difficulty', 'status',
+                         'hostUid', 'hostName', 'hostX', 'hostY', 'hostScore', 'hostBeacons', 'hostFinished',
+                         'guestUid', 'guestName', 'guestX', 'guestY', 'guestScore', 'guestBeacons', 'guestFinished',
+                         'winnerUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'roomCode', 'seed', 'biome', 'boardSize', 'difficulty', 'status',
+                         'hostUid', 'hostName', 'hostX', 'hostY', 'hostScore', 'hostBeacons', 'hostFinished',
+                         'guestUid', 'guestName', 'guestX', 'guestY', 'guestScore', 'guestBeacons', 'guestFinished',
+                         'winnerUid', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidPvpRoom(incoming()) &&
+                       incoming().hostUid == request.auth.uid &&
+                       incoming().status == 'WAITING' &&
+                       incoming().guestUid == '' &&
+                       incoming().guestName == '' &&
+                       incoming().hostFinished == false &&
+                       incoming().guestFinished == false &&
+                       incoming().winnerUid == '';
+
+      allow update: if isSignedIn() &&
+                       isValidId(roomId) &&
+                       isValidPvpRoom(incoming()) &&
+                       existing().status != 'FINISHED' &&
+                       incoming().hostUid == existing().hostUid &&
+                       incoming().roomCode == existing().roomCode &&
+                       incoming().seed == existing().seed &&
+                       incoming().biome == existing().biome &&
+                       incoming().boardSize == existing().boardSize &&
+                       incoming().difficulty == existing().difficulty &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Action 1: Challenger joins an open WAITING room
+                         (existing().status == 'WAITING' &&
+                          existing().guestUid == '' &&
+                          request.auth.uid != existing().hostUid &&
+                          incoming().guestUid == request.auth.uid &&
+                          incoming().guestName.size() >= 1 &&
+                          incoming().status == 'ACTIVE' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['guestUid', 'guestName', 'status', 'updatedAt'])) ||
+                         // Action 2: Host updates live race position/score/beacons
+                         (existing().status == 'ACTIVE' &&
+                          request.auth.uid == existing().hostUid &&
+                          incoming().guestUid == existing().guestUid &&
+                          incoming().status == 'ACTIVE' &&
+                          incoming().winnerUid == '' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['hostX', 'hostY', 'hostScore', 'hostBeacons', 'updatedAt'])) ||
+                         // Action 3: Guest updates live race position/score/beacons
+                         (existing().status == 'ACTIVE' &&
+                          request.auth.uid == existing().guestUid &&
+                          incoming().guestUid == existing().guestUid &&
+                          incoming().status == 'ACTIVE' &&
+                          incoming().winnerUid == '' &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['guestX', 'guestY', 'guestScore', 'guestBeacons', 'updatedAt'])) ||
+                         // Action 4: Host finishes and locks winner
+                         (existing().status == 'ACTIVE' &&
+                          request.auth.uid == existing().hostUid &&
+                          incoming().guestUid == existing().guestUid &&
+                          incoming().hostFinished == true &&
+                          incoming().status == 'FINISHED' &&
+                          incoming().winnerUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['hostX', 'hostY', 'hostScore', 'hostBeacons', 'hostFinished', 'status', 'winnerUid', 'updatedAt'])) ||
+                         // Action 5: Guest finishes and locks winner
+                         (existing().status == 'ACTIVE' &&
+                          request.auth.uid == existing().guestUid &&
+                          incoming().guestUid == existing().guestUid &&
+                          incoming().guestFinished == true &&
+                          incoming().status == 'FINISHED' &&
+                          incoming().winnerUid == request.auth.uid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['guestX', 'guestY', 'guestScore', 'guestBeacons', 'guestFinished', 'status', 'winnerUid', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(roomId) &&
+                       existing().hostUid == request.auth.uid &&
+                       existing().status == 'WAITING';
+    }
+
+    // --- 3. Shareable Community Maze Seeds Validation ---
+    function isValidCommunitySeed(data) {
+      return data.authorUid is string && data.authorUid.size() >= 1 && data.authorUid.size() <= 128 &&
+             data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 40 &&
+             data.title is string && data.title.size() >= 3 && data.title.size() <= 60 &&
+             data.seed is string && data.seed.size() >= 3 && data.seed.size() <= 64 &&
+             isValidBiome(data.biome) &&
+             isValidBoardSize(data.boardSize) &&
+             isValidDifficulty(data.difficulty) &&
+             data.strategicMaze is bool &&
+             data.visibility is string && data.visibility == 'PUBLIC' &&
+             data.bestScore is int && data.bestScore >= 0 && data.bestScore <= 999999 &&
+             data.playsCount is int && data.playsCount >= 0 && data.playsCount <= 9999999 &&
+             data.upvotes is int && data.upvotes >= 0 && data.upvotes <= 9999999 &&
+             isValidTimestamp(data.createdAt) &&
+             isValidTimestamp(data.updatedAt);
+    }
+
+    match /community_seeds/{seedId} {
+      allow get: if isSignedIn() &&
+                    isValidId(seedId) &&
+                    (existing().visibility == 'PUBLIC' || existing().authorUid == request.auth.uid);
+
+      allow list: if isSignedIn() &&
+                     (resource.data.visibility == 'PUBLIC' || resource.data.authorUid == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(seedId) &&
+                       incoming().keys().hasAll([
+                         'authorUid', 'authorName', 'title', 'seed', 'biome', 'boardSize',
+                         'difficulty', 'strategicMaze', 'visibility', 'bestScore',
+                         'playsCount', 'upvotes', 'createdAt', 'updatedAt'
+                       ]) &&
+                       incoming().keys().hasOnly([
+                         'authorUid', 'authorName', 'title', 'seed', 'biome', 'boardSize',
+                         'difficulty', 'strategicMaze', 'visibility', 'bestScore',
+                         'playsCount', 'upvotes', 'createdAt', 'updatedAt'
+                       ]) &&
+                       isValidCommunitySeed(incoming()) &&
+                       incoming().authorUid == request.auth.uid &&
+                       incoming().playsCount == 0 &&
+                       incoming().upvotes == 0;
+
+      allow update: if isSignedIn() &&
+                       isValidId(seedId) &&
+                       isValidCommunitySeed(incoming()) &&
+                       incoming().authorUid == existing().authorUid &&
+                       incoming().authorName == existing().authorName &&
+                       incoming().seed == existing().seed &&
+                       incoming().biome == existing().biome &&
+                       incoming().boardSize == existing().boardSize &&
+                       incoming().difficulty == existing().difficulty &&
+                       incoming().strategicMaze == existing().strategicMaze &&
+                       incoming().visibility == existing().visibility &&
+                       incoming().createdAt == existing().createdAt &&
+                       (
+                         // Action 1: Author updates challenge title or record
+                         (request.auth.uid == existing().authorUid &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'bestScore', 'updatedAt'])) ||
+                         // Action 2: Community racer increments playsCount (+1), upvotes (+1), or sets higher bestScore
+                         (incoming().playsCount >= existing().playsCount &&
+                          incoming().playsCount <= existing().playsCount + 1 &&
+                          incoming().upvotes >= existing().upvotes &&
+                          incoming().upvotes <= existing().upvotes + 1 &&
+                          incoming().bestScore >= existing().bestScore &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['playsCount', 'upvotes', 'bestScore', 'updatedAt']))
+                       );
+
+      allow delete: if isSignedIn() &&
+                       isValidId(seedId) &&
+                       existing().authorUid == request.auth.uid;
+    }
+
+    // --- 4. Daily Ranked Leaderboard + Deterministic Ghost Replay Frames ---
+    // Path: /daily_ranked/{dateKey}/entries/{userId}
+    match /daily_ranked/{dateKey}/entries/{userId} {
+      // Signed-in racers can fetch top runs to render deterministic Ghost Racers
+      allow get: if isSignedIn() && isValidId(dateKey) && isValidId(userId);
+      allow list: if isSignedIn() && isValidId(dateKey) && resource.data.score > 0;
+
+      allow create, update: if isOwner(userId) &&
+        isValidId(dateKey) &&
+        isValidId(userId) &&
+        incoming().keys().hasAll([
+          'uid', 'displayName', 'score', 'clearTimeMs',
+          'sha256Fingerprint', 'compressedInputs', 'submittedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'uid', 'displayName', 'score', 'clearTimeMs',
+          'sha256Fingerprint', 'compressedInputs', 'submittedAt'
+        ]) &&
+        incoming().uid == userId &&
+        incoming().displayName is string &&
+        incoming().displayName.size() >= 1 &&
+        incoming().displayName.size() <= 40 &&
+        incoming().score is int &&
+        incoming().score > 0 &&
+        incoming().score <= 2500000 &&
+        incoming().clearTimeMs is int &&
+        incoming().clearTimeMs >= 8000 && // Anti-speedhack floor (8s min)
+        isValidSha256(incoming().sha256Fingerprint) &&
+        // Cap compressed replay input stream at 32KB to block storage abuse
+        incoming().compressedInputs is string &&
+        incoming().compressedInputs.size() <= 32768 &&
+        isValidTimestamp(incoming().submittedAt) &&
+        // Only allow improving existing personal best
+        (!exists(/databases/$(database)/documents/daily_ranked/$(dateKey)/entries/$(userId)) ||
+         incoming().score > existing().score);
+
+      allow delete: if false;
+    }
+
+    // --- 5. Abyssal Depth Endless Leaderboard ---
+    match /abyssal_leaderboard/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn() && resource.data.highestFloor >= 1;
+
+      allow create, update: if isOwner(userId) &&
+        isValidId(userId) &&
+        incoming().keys().hasAll([
+          'uid', 'displayName', 'highestFloor', 'totalScore',
+          'runRootSeed', 'runFingerprint', 'updatedAt'
+        ]) &&
+        incoming().keys().hasOnly([
+          'uid', 'displayName', 'highestFloor', 'totalScore',
+          'runRootSeed', 'runFingerprint', 'updatedAt'
+        ]) &&
+        incoming().uid == userId &&
+        incoming().displayName is string &&
+        incoming().displayName.size() >= 1 &&
+        incoming().displayName.size() <= 40 &&
+        incoming().highestFloor is int &&
+        incoming().highestFloor >= 1 &&
+        incoming().highestFloor <= 999 &&
+        incoming().totalScore is int &&
+        incoming().totalScore >= 0 &&
+        incoming().totalScore <= 99999999 &&
+        incoming().runRootSeed is int &&
+        isValidSha256(incoming().runFingerprint) &&
+        isValidTimestamp(incoming().updatedAt) &&
+        (!exists(/databases/$(database)/documents/abyssal_leaderboard/$(userId)) ||
+         incoming().highestFloor > existing().highestFloor ||
+         (incoming().highestFloor == existing().highestFloor && incoming().totalScore >= existing().totalScore));
+
+      allow delete: if false;
+    }
+
+    // --- 6. Live-Ops Dynamic Balance Config (Read-only for clients) ---
+    match /live_config/{docId} {
+      allow get: if isSignedIn() && isValidId(docId);
+      allow list, write: if false;
+    }
+  }
+}

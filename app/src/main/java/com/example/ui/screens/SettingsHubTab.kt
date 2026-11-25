@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -16,13 +17,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -38,13 +43,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.CampaignProgressEntity
 import com.example.data.PlayerProfileEntity
+import com.example.data.totalUpgradeLevels
+import com.example.engine.CampaignCatalog
+import com.example.engine.DeveloperRatingAudit
 import com.example.engine.ENGINE_VERSION
+import com.example.engine.MinerAbility
+import com.example.engine.MinerRank
 import com.example.i18n.AppLanguage
 import com.example.i18n.LocalizedStrings
 import com.example.ui.theme.CrystalCyan
@@ -62,6 +77,7 @@ fun SettingsHubTab(
     strings: LocalizedStrings,
     currentLanguage: AppLanguage,
     profile: PlayerProfileEntity,
+    campaignProgress: List<CampaignProgressEntity>,
     remoteServerStatus: String?,
     onSelectLanguage: (AppLanguage) -> Unit,
     onToggleSound: () -> Unit,
@@ -71,6 +87,15 @@ fun SettingsHubTab(
     onTestServer: (String) -> Unit,
     onOpenTutorial: () -> Unit
 ) {
+    val totalStars = remember(campaignProgress) { campaignProgress.sumOf { it.stars } }
+    val clearedIds = remember(campaignProgress) {
+        campaignProgress.filter { it.stars > 0 }.map { it.levelId }.toSet()
+    }
+    val unlockedAbilities = remember(clearedIds) { CampaignCatalog.unlockedAbilities(clearedIds) }
+    val forgeLevels = profile.totalUpgradeLevels()
+    val minerRank = remember(profile.totalWins, totalStars, forgeLevels) {
+        MinerRank.forProgress(profile.totalWins, totalStars, forgeLevels)
+    }
     var serverUrlDraft by remember(profile.verifierServerUrl) {
         mutableStateOf(profile.verifierServerUrl)
     }
@@ -80,6 +105,291 @@ fun SettingsHubTab(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
+        // Flagship Game Bio, Feature Matrix & Dexter Lamar Vann Studio Showcase
+        item {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = ObsidianCard,
+                border = BorderStroke(1.2.dp, ForgedGold.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_game_bio_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Image(
+                            painter = painterResource(id = R.drawable.img_official_app_icon),
+                            contentDescription = "Maze Miner Race Official Icon",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .size(60.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                        )
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "Maze Miner Race",
+                                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = ForgedGold
+                                )
+                                Icon(
+                                    Icons.Filled.Verified,
+                                    contentDescription = null,
+                                    tint = EmeraldGem,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            Text(
+                                text = "Creator & Lead Developer: Dexter Lamar Vann",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = CrystalCyan
+                            )
+                            Text(
+                                text = "Vann Family Ventures LLC • Engine v$ENGINE_VERSION",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    Text(
+                        text = "Carve tactical shortcuts through braided subterranean labyrinths in multi-leg strategic circuit races against adaptive BFS Cyber-Driller rivals. Sync quadrant Relay Beacons to unseal deep randomized Finish Portals across 5 atmospheric biomes—Volcanic lava puddles & embers, Arctic ice slides, Desert sand drifts, Bioluminescent caverns, and Arcane ruins—spanning 20 progressive levels, 5 unlocked boards (15×15 up to 29×29 Grand Labyrinth), 6 unlockable abilities, Fever 5× & Chain Blasts, live tactical radar, adaptive synthwave audio, and 0-tolerance SHA-256 verified daily competition.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = TextSecondary
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BioFeatureChip("Braided Maze + Beacons", ForgedGold, Modifier.weight(1f))
+                        BioFeatureChip("20 Levels • 5 Boards", CrystalCyan, Modifier.weight(1f))
+                        BioFeatureChip("SHA-256 Anti-Cheat", EmeraldGem, Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BioFeatureChip("Adaptive 4-Rival AI", CrystalCyan, Modifier.weight(1f))
+                        BioFeatureChip("Fever 5× + Chain TNT", ForgedGold, Modifier.weight(1f))
+                        BioFeatureChip("11 Languages + RTL", EmeraldGem, Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BioFeatureChip("60fps 2.5D Canvas", EmeraldGem, Modifier.weight(1f))
+                        BioFeatureChip("Adaptive Synth Audio", ForgedGold, Modifier.weight(1f))
+                        BioFeatureChip("Play Policy Verified", CrystalCyan, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
+        // Accurate Evidence-Backed Developer Level Rating & Engineering Audit Card
+        item {
+            val composite = DeveloperRatingAudit.compositeScore
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = ObsidianCard,
+                border = BorderStroke(1.2.dp, CrystalCyan.copy(alpha = 0.55f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_developer_rating_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                Icons.Filled.AutoAwesome,
+                                contentDescription = null,
+                                tint = CrystalCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Developer Level & Build Audit",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = CrystalCyan
+                                )
+                                Text(
+                                    text = "Dexter Lamar Vann • ${DeveloperRatingAudit.DEVELOPER_TITLE}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextSecondary
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = ForgedGold.copy(alpha = 0.18f),
+                            border = BorderStroke(1.dp, ForgedGold)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(
+                                    text = "%.2f / 10".format(composite),
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = ForgedGold
+                                )
+                                Text(
+                                    text = "DEV LV.${DeveloperRatingAudit.developerLevel}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                    color = EmeraldGem
+                                )
+                            }
+                        }
+                    }
+
+                    DeveloperRatingAudit.pillars.forEach { pillar ->
+                        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = pillar.name,
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "%.1f / 10".format(pillar.scoreOutOfTen),
+                                    style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = if (pillar.scoreOutOfTen >= 9.5) EmeraldGem else ForgedGold
+                                )
+                            }
+                            LinearProgressIndicator(
+                                progress = { (pillar.scoreOutOfTen / 10.0).toFloat().coerceIn(0f, 1f) },
+                                color = if (pillar.scoreOutOfTen >= 9.5) EmeraldGem else CrystalCyan,
+                                trackColor = ObsidianDeep,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                            )
+                            Text(
+                                text = pillar.evidence,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = TextMuted
+                            )
+                        }
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = ObsidianDeep,
+                        border = BorderStroke(1.dp, ObsidianBorder),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = DeveloperRatingAudit.NEXT_MILESTONE_NOTE,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = TextSecondary,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+            }
+        }
+
+        // Live Career Mastery & Miner Rank Card
+        item {
+            Surface(
+                shape = RoundedCornerShape(18.dp),
+                color = ObsidianCard,
+                border = BorderStroke(1.dp, EmeraldGem.copy(alpha = 0.45f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("settings_career_mastery_card")
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.EmojiEvents,
+                                contentDescription = null,
+                                tint = ForgedGold,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = minerRank.title,
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                    color = ForgedGold
+                                )
+                                Text(
+                                    text = "Career Mastery Telemetry",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = EmeraldGem.copy(alpha = 0.16f),
+                            border = BorderStroke(1.dp, EmeraldGem.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = minerRank.badge,
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                color = EmeraldGem,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CareerStatBox("Wins", "${profile.totalWins}", ForgedGold, Modifier.weight(1f))
+                        CareerStatBox("Stars", "$totalStars/${CampaignCatalog.MAX_STARS}", CrystalCyan, Modifier.weight(1f))
+                        CareerStatBox("Abilities", "${unlockedAbilities.size}/${MinerAbility.entries.size}", EmeraldGem, Modifier.weight(1f))
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        CareerStatBox("Blocks", "${profile.totalBlocksBroken}", TextPrimary, Modifier.weight(1f))
+                        CareerStatBox("Gems Mined", "${profile.totalGemsCollected}", CrystalCyan, Modifier.weight(1f))
+                        CareerStatBox("Forge", "Lv.$forgeLevels/28", ForgedGold, Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+
         // 11-Language Selector Menu
         item {
             Surface(
@@ -377,5 +687,62 @@ private fun ToggleRow(
             ),
             modifier = Modifier.testTag(tag)
         )
+    }
+}
+
+@Composable
+private fun BioFeatureChip(
+    text: String,
+    accent: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = ObsidianDeep,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.42f)),
+        modifier = modifier
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+            color = accent,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+        )
+    }
+}
+
+@Composable
+private fun CareerStatBox(
+    label: String,
+    value: String,
+    accent: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = ObsidianDeep,
+        border = BorderStroke(1.dp, ObsidianBorder),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp)
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                color = accent,
+                maxLines = 1
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = TextMuted,
+                maxLines = 1
+            )
+        }
     }
 }

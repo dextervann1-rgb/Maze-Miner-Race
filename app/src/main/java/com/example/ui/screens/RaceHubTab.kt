@@ -16,12 +16,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Explore
 import androidx.compose.material.icons.filled.GridView
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SmartToy
@@ -54,11 +58,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.data.CampaignProgressEntity
+import com.example.engine.Biome
 import com.example.engine.BoardArchetype
 import com.example.engine.CampaignCatalog
 import com.example.engine.CampaignLevel
 import com.example.engine.Difficulty
 import com.example.engine.MazeGenerator
+import com.example.engine.MinerAbility
 import com.example.engine.RivalPersonality
 import com.example.i18n.AppStrings
 import com.example.i18n.LocalizedStrings
@@ -80,12 +86,15 @@ fun RaceHubTab(
     selectedDifficulty: Difficulty,
     selectedRival: RivalPersonality,
     selectedArchetype: BoardArchetype,
+    selectedBiomeOverride: Biome?,
     campaignProgress: List<CampaignProgressEntity>,
     onSeedChange: (String) -> Unit,
     onTodaySeed: () -> Unit,
     onSelectDifficulty: (Difficulty) -> Unit,
     onSelectRival: (RivalPersonality) -> Unit,
     onSelectArchetype: (BoardArchetype) -> Unit,
+    onSelectBiomeOverride: (Biome?) -> Unit,
+    onQuickPlayBoard: (BoardArchetype) -> Unit,
     onPlayRanked: () -> Unit,
     onPlayPractice: () -> Unit,
     onStartCampaignLevel: (CampaignLevel) -> Unit
@@ -95,10 +104,16 @@ fun RaceHubTab(
     val modifier = MazeGenerator.modifierForSeed(activeSeed)
 
     val progressByLevel = remember(campaignProgress) { campaignProgress.associateBy { it.levelId } }
+    val clearedIds = remember(campaignProgress) {
+        campaignProgress.filter { it.stars > 0 }.map { it.levelId }.toSet()
+    }
+    val unlockedAbilities = remember(clearedIds) { CampaignCatalog.unlockedAbilities(clearedIds) }
     val totalStars = remember(campaignProgress) { campaignProgress.sumOf { it.stars } }
-    var selectedAct by remember { mutableStateOf(BoardArchetype.SPRINT_15) }
-    val actLevels = remember(selectedAct) {
-        CampaignCatalog.levels.filter { it.archetype == selectedAct }
+    // null = show ALL 20 progressive levels across all 4 board sizes
+    var selectedBoardFilter by remember { mutableStateOf<BoardArchetype?>(null) }
+    val visibleLevels = remember(selectedBoardFilter) {
+        if (selectedBoardFilter == null) CampaignCatalog.levels
+        else CampaignCatalog.levels.filter { it.archetype == selectedBoardFilter }
     }
 
     LazyColumn(
@@ -131,7 +146,250 @@ fun RaceHubTab(
             }
         }
 
-        // 15-Level Multi-Board Expedition Campaign Section
+        // All 4 Playable Boards — 1-Tap Instant Launch Grid
+        item {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = ObsidianCard,
+                border = BorderStroke(1.dp, CrystalCyan.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.GridView,
+                                contentDescription = null,
+                                tint = CrystalCyan,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "All 5 Boards — Strategic Instant Play",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = TextPrimary
+                                )
+                                Text(
+                                    text = "Braided mazes, Relay Beacons & any biome from 15×15 up to 29×29",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                    }
+
+                    // 5-Biome Atmosphere Quick Selector (Auto + Desert/Ice/Volcano/Cavern/Ruins)
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("quick_biome_selector")
+                    ) {
+                        item {
+                            FilterChip(
+                                selected = selectedBiomeOverride == null,
+                                onClick = { onSelectBiomeOverride(null) },
+                                label = { Text("🎲 Auto", style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = ForgedGold,
+                                    selectedLabelColor = ObsidianDeep,
+                                    containerColor = ObsidianDeep,
+                                    labelColor = TextSecondary
+                                ),
+                                modifier = Modifier.testTag("biome_chip_auto")
+                            )
+                        }
+                        items(Biome.entries) { b ->
+                            val emoji = when (b) {
+                                Biome.DESERT -> "🏜️"
+                                Biome.ICE -> "🧊"
+                                Biome.VOLCANO -> "🌋"
+                                Biome.CAVERN -> "💎"
+                                Biome.RUINS -> "🏛️"
+                            }
+                            FilterChip(
+                                selected = selectedBiomeOverride == b,
+                                onClick = { onSelectBiomeOverride(b) },
+                                label = { Text("$emoji ${b.wireName}", style = MaterialTheme.typography.labelSmall) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CrystalCyan,
+                                    selectedLabelColor = ObsidianDeep,
+                                    containerColor = ObsidianDeep,
+                                    labelColor = TextSecondary
+                                ),
+                                modifier = Modifier.testTag("biome_chip_${b.wireName.lowercase()}")
+                            )
+                        }
+                    }
+
+                    BoardArchetype.entries.chunked(2).forEach { pair ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            pair.forEach { arch ->
+                                Surface(
+                                    onClick = { onQuickPlayBoard(arch) },
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = ObsidianDeep,
+                                    border = BorderStroke(1.dp, CrystalCyan.copy(alpha = 0.45f)),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("quick_board_${arch.size}")
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${arch.size}×${arch.size} • ⚡${arch.strategicBeaconCount}",
+                                                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.ExtraBold),
+                                                color = if (arch == BoardArchetype.GRAND_29) ForgedGold else CrystalCyan
+                                            )
+                                            Text(
+                                                text = "${arch.label.substringAfter(" ")} (${arch.strategicBeaconCount} Beacons)",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = TextSecondary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                        Icon(
+                                            Icons.Filled.PlayArrow,
+                                            contentDescription = "Play ${arch.label}",
+                                            tint = ForgedGold,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Progressive Unlockable Miner Abilities Card
+        item {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = ObsidianCard,
+                border = BorderStroke(1.dp, ForgedGold.copy(alpha = 0.45f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.AutoAwesome,
+                                contentDescription = null,
+                                tint = ForgedGold,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "Unlockable Miner Abilities",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = ForgedGold
+                                )
+                                Text(
+                                    text = "Clear progressive levels to unlock permanent board powers",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = TextMuted
+                                )
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(999.dp),
+                            color = CrystalCyan.copy(alpha = 0.16f)
+                        ) {
+                            Text(
+                                text = "${unlockedAbilities.size}/${MinerAbility.entries.size}",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = CrystalCyan,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
+
+                    MinerAbility.entries.forEach { ability ->
+                        val isUnlocked = ability in unlockedAbilities
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = if (isUnlocked) EmeraldGem.copy(alpha = 0.10f) else ObsidianDeep,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isUnlocked) EmeraldGem.copy(alpha = 0.45f) else ObsidianBorder
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isUnlocked) Icons.Filled.CheckCircle else Icons.Filled.Lock,
+                                    contentDescription = null,
+                                    tint = if (isUnlocked) EmeraldGem else TextMuted,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = ability.displayName,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (isUnlocked) TextPrimary else TextSecondary
+                                        )
+                                        Text(
+                                            text = when {
+                                                isUnlocked -> "ACTIVE"
+                                                else -> "Clear Lv.${ability.unlockAfterLevel}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                            color = if (isUnlocked) EmeraldGem else ForgedGold
+                                        )
+                                    }
+                                    Text(
+                                        text = ability.shortEffect,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = TextMuted
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 20-Level Multi-Board Progressive Expedition Campaign Section
         item {
             Surface(
                 shape = RoundedCornerShape(20.dp),
@@ -165,7 +423,7 @@ fun RaceHubTab(
                                     color = TextPrimary
                                 )
                                 Text(
-                                    text = "15 Handcrafted Levels • 3 Board Sizes",
+                                    text = "${CampaignCatalog.TOTAL_LEVELS} Progressive Levels • 4 Board Sizes",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = TextMuted
                                 )
@@ -188,7 +446,7 @@ fun RaceHubTab(
                                     modifier = Modifier.size(14.dp)
                                 )
                                 Text(
-                                    text = "$totalStars / 45",
+                                    text = "$totalStars / ${CampaignCatalog.MAX_STARS}",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = ForgedGold
                                 )
@@ -196,24 +454,31 @@ fun RaceHubTab(
                         }
                     }
 
-                    // Act / Board Size Filter Chips
+                    // Board Filter Chips: All (20) + 15x15 / 19x19 / 21x21 / 25x25
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        BoardArchetype.entries.forEachIndexed { idx, arch ->
-                            val selected = arch == selectedAct
-                            val shortLabel = when (arch) {
-                                BoardArchetype.SPRINT_15 -> "Act I • 15×15"
-                                BoardArchetype.CLASSIC_21 -> "Act II • 21×21"
-                                BoardArchetype.ABYSSAL_25 -> "Act III • 25×25"
-                            }
+                        FilterChip(
+                            selected = selectedBoardFilter == null,
+                            onClick = { selectedBoardFilter = null },
+                            label = { Text("All (20)", style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = EmeraldGem,
+                                selectedLabelColor = ObsidianDeep,
+                                containerColor = ObsidianDeep,
+                                labelColor = TextSecondary
+                            ),
+                            modifier = Modifier.testTag("campaign_filter_all")
+                        )
+                        BoardArchetype.entries.forEach { arch ->
+                            val selected = arch == selectedBoardFilter
                             FilterChip(
                                 selected = selected,
-                                onClick = { selectedAct = arch },
+                                onClick = { selectedBoardFilter = arch },
                                 label = {
                                     Text(
-                                        text = shortLabel,
+                                        text = "${arch.size}×${arch.size}",
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
@@ -227,7 +492,7 @@ fun RaceHubTab(
                                 ),
                                 modifier = Modifier
                                     .weight(1f)
-                                    .testTag("campaign_act_${idx + 1}")
+                                    .testTag("campaign_act_${arch.size}")
                             )
                         }
                     }
@@ -235,8 +500,8 @@ fun RaceHubTab(
             }
         }
 
-        // Campaign Level Cards for Selected Act
-        items(actLevels, key = { it.id }) { level ->
+        // Progressive Campaign Level Cards (All Unlocked & Playable)
+        items(visibleLevels, key = { it.id }) { level ->
             val prog = progressByLevel[level.id]
             val stars = prog?.stars ?: 0
             val claimedFirst = prog?.firstClearClaimed == true
@@ -249,6 +514,7 @@ fun RaceHubTab(
                     1.dp,
                     if (stars == 3) ForgedGold.copy(alpha = 0.6f)
                     else if (stars > 0) EmeraldGem.copy(alpha = 0.45f)
+                    else if (level.unlocksAbility != null) CrystalCyan.copy(alpha = 0.55f)
                     else ObsidianBorder
                 ),
                 modifier = Modifier
@@ -266,7 +532,7 @@ fun RaceHubTab(
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
@@ -277,6 +543,17 @@ fun RaceHubTab(
                                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.ExtraBold),
                                     color = ForgedGold,
                                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = CrystalCyan.copy(alpha = 0.15f)
+                            ) {
+                                Text(
+                                    text = "${level.archetype.size}×${level.archetype.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CrystalCyan,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
                             Text(
@@ -301,6 +578,17 @@ fun RaceHubTab(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (level.unlocksAbility != null) {
+                            val unlocked = level.unlocksAbility in unlockedAbilities
+                            Text(
+                                text = if (unlocked) "✓ UNLOCKED: ${level.unlocksAbility.displayName}"
+                                else "⚡ UNLOCKS: ${level.unlocksAbility.displayName}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                                color = if (unlocked) EmeraldGem else ForgedGold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     Spacer(modifier = Modifier.width(10.dp))

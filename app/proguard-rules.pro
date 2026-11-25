@@ -26,6 +26,16 @@
 -keep class com.android.billingclient.api.** { *; }
 -keep class com.example.billing.** { *; }
 
+# Firebase Firestore Cloud Models (CloudProfileSave, PvpMatchRoom, CommunityMazeSeed, Ghosts, Abyssal)
+-keep class com.example.cloud.** { *; }
+-keep @androidx.annotation.Keep class * { *; }
+-keep @com.google.firebase.firestore.IgnoreExtraProperties class * { *; }
+-keepclassmembers class * {
+    @com.google.firebase.firestore.DocumentId <fields>;
+    @com.google.firebase.firestore.ServerTimestamp <fields>;
+    @com.google.firebase.firestore.PropertyName <fields>;
+}
+
 # Deterministic Engine Models & Replay Action Payloads
 -keep class com.example.engine.** { *; }
 

@@ -29,10 +29,13 @@ import androidx.compose.material.icons.filled.Diamond
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.EmojiEvents
 import androidx.compose.material.icons.outlined.Flag
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,12 +59,20 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.example.billing.BillingUiState
 import com.example.billing.StorePackSpec
+import com.example.cloud.AbyssalLeaderboardEntry
+import com.example.cloud.CloudProfileSave
+import com.example.cloud.CloudUiState
+import com.example.cloud.CommunityMazeSeed
+import com.example.cloud.DailyRankedGhostEntry
+import com.example.cloud.PvpMatchRoom
 import com.example.data.CampaignProgressEntity
 import com.example.data.LeaderboardEntity
 import com.example.data.PlayerProfileEntity
+import com.example.engine.Biome
 import com.example.engine.BoardArchetype
 import com.example.engine.CampaignLevel
 import com.example.engine.Difficulty
+import com.example.engine.LiveBalanceConfig
 import com.example.engine.RivalPersonality
 import com.example.engine.UpgradeType
 import com.example.i18n.AppLanguage
@@ -94,6 +105,8 @@ fun HubScreen(
     onSelectDifficulty: (Difficulty) -> Unit,
     onSelectRival: (RivalPersonality) -> Unit,
     onSelectArchetype: (BoardArchetype) -> Unit,
+    onSelectBiomeOverride: (Biome?) -> Unit,
+    onQuickPlayBoard: (BoardArchetype) -> Unit,
     onPlayRanked: () -> Unit,
     onPlayPractice: () -> Unit,
     onStartCampaignLevel: (CampaignLevel) -> Unit,
@@ -110,7 +123,30 @@ fun HubScreen(
     onToggleHaptics: () -> Unit,
     onToggleDpad: () -> Unit,
     onTestServer: (String) -> Unit,
-    onOpenTutorial: () -> Unit
+    onOpenTutorial: () -> Unit,
+    currentUserId: String,
+    currentUserDisplayName: String,
+    cloudProfileState: CloudUiState<CloudProfileSave?>,
+    openPvpRoomsState: CloudUiState<List<PvpMatchRoom>>,
+    communitySeedsState: CloudUiState<List<CommunityMazeSeed>>,
+    dailyGhostsState: CloudUiState<List<DailyRankedGhostEntry>>,
+    abyssalLeaderboardState: CloudUiState<List<AbyssalLeaderboardEntry>>,
+    liveBalanceConfig: LiveBalanceConfig,
+    activePvpRoom: PvpMatchRoom?,
+    isCloudSyncing: Boolean,
+    onSyncCloudNow: () -> Unit,
+    onSignOut: () -> Unit,
+    onHostPvpRoom: (String, Biome, Int, Difficulty) -> Unit,
+    onJoinPvpRoom: (PvpMatchRoom) -> Unit,
+    onJoinPvpByCode: (String) -> Unit,
+    onCancelWaitingRoom: () -> Unit,
+    onLaunchActivePvpMatch: (PvpMatchRoom) -> Unit,
+    onStartAbyssalDescent: () -> Unit,
+    onPlayDailyGhost: (DailyRankedGhostEntry) -> Unit,
+    onPublishCommunitySeed: (String, String, Biome, Int, Difficulty, Boolean, () -> Unit) -> Unit,
+    onPlayCommunitySeed: (CommunityMazeSeed) -> Unit,
+    onUpvoteCommunitySeed: (CommunityMazeSeed) -> Unit,
+    onDeleteCommunitySeed: (CommunityMazeSeed) -> Unit
 ) {
     BackHandler {
         onBackToLaunch()
@@ -118,6 +154,7 @@ fun HubScreen(
 
     val navItems = listOf(
         HubNavItem(HubTab.RACE, strings.tabRace, Icons.Filled.Flag, Icons.Outlined.Flag),
+        HubNavItem(HubTab.CLOUD, "Cloud", Icons.Filled.Public, Icons.Outlined.Public),
         HubNavItem(HubTab.FORGE, strings.tabForge, Icons.Filled.Build, Icons.Outlined.Build),
         HubNavItem(HubTab.RANKS, strings.tabRanks, Icons.Filled.EmojiEvents, Icons.Outlined.EmojiEvents),
         HubNavItem(HubTab.SETTINGS, strings.tabSettings, Icons.Filled.Tune, Icons.Outlined.Tune)
@@ -133,7 +170,8 @@ fun HubScreen(
                 HubTopHeader(
                     title = strings.appTitle,
                     profile = profile,
-                    onBackToLaunch = onBackToLaunch
+                    onBackToLaunch = onBackToLaunch,
+                    onOpenTutorial = onOpenTutorial
                 )
             },
             bottomBar = {
@@ -218,19 +256,54 @@ fun HubScreen(
                                 selectedDifficulty = uiState.selectedDifficulty,
                                 selectedRival = uiState.selectedRival,
                                 selectedArchetype = uiState.selectedArchetype,
+                                selectedBiomeOverride = uiState.selectedBiomeOverride,
                                 campaignProgress = campaignProgress,
                                 onSeedChange = onSeedChange,
                                 onTodaySeed = onTodaySeed,
                                 onSelectDifficulty = onSelectDifficulty,
                                 onSelectRival = onSelectRival,
                                 onSelectArchetype = onSelectArchetype,
+                                onSelectBiomeOverride = onSelectBiomeOverride,
+                                onQuickPlayBoard = onQuickPlayBoard,
                                 onPlayRanked = onPlayRanked,
                                 onPlayPractice = onPlayPractice,
                                 onStartCampaignLevel = onStartCampaignLevel
                             )
+                            HubTab.CLOUD -> CloudHubTab(
+                                currentUserId = currentUserId,
+                                displayName = currentUserDisplayName,
+                                selectedBiome = uiState.selectedBiomeOverride ?: Biome.VOLCANO,
+                                selectedArchetype = uiState.selectedArchetype,
+                                selectedDifficulty = uiState.selectedDifficulty,
+                                currentSeedInput = uiState.seedInput,
+                                totalCampaignStars = campaignProgress.sumOf { it.stars },
+                                highestAbyssalFloor = profile.highestAbyssalFloor,
+                                cloudProfileState = cloudProfileState,
+                                openPvpRoomsState = openPvpRoomsState,
+                                communitySeedsState = communitySeedsState,
+                                dailyGhostsState = dailyGhostsState,
+                                abyssalLeaderboardState = abyssalLeaderboardState,
+                                liveBalanceConfig = liveBalanceConfig,
+                                activePvpRoom = activePvpRoom,
+                                isSyncing = isCloudSyncing,
+                                onSyncNow = onSyncCloudNow,
+                                onSignOut = onSignOut,
+                                onHostPvpRoom = onHostPvpRoom,
+                                onJoinPvpRoom = onJoinPvpRoom,
+                                onJoinPvpByCode = onJoinPvpByCode,
+                                onCancelWaitingRoom = onCancelWaitingRoom,
+                                onLaunchActivePvpMatch = onLaunchActivePvpMatch,
+                                onStartAbyssalDescent = onStartAbyssalDescent,
+                                onPlayDailyGhost = onPlayDailyGhost,
+                                onPublishSeed = onPublishCommunitySeed,
+                                onPlayCommunitySeed = onPlayCommunitySeed,
+                                onUpvoteCommunitySeed = onUpvoteCommunitySeed,
+                                onDeleteCommunitySeed = onDeleteCommunitySeed
+                            )
                             HubTab.FORGE -> ForgeHubTab(
                                 strings = strings,
                                 profile = profile,
+                                campaignProgress = campaignProgress,
                                 liveRace = uiState.liveRace,
                                 billingState = billingState,
                                 onBuyUpgrade = onBuyUpgrade,
@@ -251,6 +324,7 @@ fun HubScreen(
                                 strings = strings,
                                 currentLanguage = currentLanguage,
                                 profile = profile,
+                                campaignProgress = campaignProgress,
                                 remoteServerStatus = uiState.remoteServerStatus,
                                 onSelectLanguage = onSelectLanguage,
                                 onToggleSound = onToggleSound,
@@ -279,7 +353,8 @@ private data class HubNavItem(
 private fun HubTopHeader(
     title: String,
     profile: PlayerProfileEntity,
-    onBackToLaunch: () -> Unit
+    onBackToLaunch: () -> Unit,
+    onOpenTutorial: () -> Unit
 ) {
     Surface(
         color = ObsidianSurface,
@@ -312,7 +387,21 @@ private fun HubTopHeader(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                IconButton(
+                    onClick = onOpenTutorial,
+                    modifier = Modifier.testTag("hub_open_guide_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.MenuBook,
+                        contentDescription = "How to Play Guide",
+                        tint = ForgedGold,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
                 Surface(
                     shape = RoundedCornerShape(999.dp),
                     color = ObsidianCard,

@@ -4,6 +4,7 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import com.example.engine.UpgradeType
 
 @Entity(
     tableName = "leaderboard",
@@ -70,7 +71,7 @@ data class CampaignProgressEntity(
 data class PlayerProfileEntity(
     @PrimaryKey
     val id: Int = 1,
-    val gems: Int = 60,
+    val gems: Int = 35,
     val streak: Int = 0,
     val bestStreak: Int = 0,
     val totalWins: Int = 0,
@@ -91,5 +92,16 @@ data class PlayerProfileEntity(
     val musicEnabled: Boolean = true,
     val hapticsEnabled: Boolean = true,
     val showDpad: Boolean = true,
-    val verifierServerUrl: String = ""
-)
+    val verifierServerUrl: String = "",
+    val gauntletCompleted: Boolean = false,
+    val highestAbyssalFloor: Int = 0
+) {
+    fun levelFor(upgrade: UpgradeType): Int = when (upgrade) {
+        UpgradeType.TITANIUM_PICK -> pickLevel
+        UpgradeType.LANTERN_OPTICS -> lanternLevel
+        UpgradeType.STAMINA_FLASK -> staminaLevel
+        UpgradeType.SONAR_RIG -> sonarLevel
+        UpgradeType.GEM_HARVESTER -> harvesterLevel
+        UpgradeType.BLAST_SHIELD -> shieldLevel
+    }
+}
